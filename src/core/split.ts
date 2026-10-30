@@ -10,10 +10,10 @@ import {
   sideOfLoop,
 } from "./labels";
 import { Arena, GeometryError, RunRegistry, type Wasm, halfSpaceSize } from "./manifoldBridge";
-import { type PlaneFrame, type Vec2, type Vec3, add, dot, fitPlane, frameFromNormal, scale, sub, toLocal } from "./math";
+import { type PlaneFrame, type Vec2, type Vec3, add, cross, dot, fitPlane, frameFromNormal, length, scale, sub, toLocal } from "./math";
 import { type IndexedMesh, buildEdgeTable, faceCentroids, faceNeighbors, faceNormalsAndAreas, halfEdgeFrom, triCount } from "./mesh";
 import { type PartGeometry, cutTag, tagCutId, tagSide } from "./part";
-import { type Triangulator, capLoop } from "./repair";
+import { type Triangulator, capLoop, membraneCap } from "./repair";
 import { FDM_MIN_WALL, FLAP_WIDTH, capFlap } from "./flaps";
 import { decomposeSolids } from "./solids";
 
@@ -134,8 +134,6 @@ function exactSplit(
       Math.abs(inside.volume() - expectedInside) <= tol &&
       Math.abs(outside.volume() - (vWhole - expectedInside)) <= tol;
     if (ok) return [arena.track(inside), arena.track(outside)];
-    if (process.env.OMNISLICE_DEBUG)
-      console.log("exactSplit falhou:", { guardIn: touchesGuard(inside, guards), guardOut: touchesGuard(outside, guards), vIn: inside.volume(), expectedInside, vOut: outside.volume(), vWhole });
     inside.delete();
     outside.delete();
   }
@@ -633,7 +631,7 @@ export function splitByRegions(w: Wasm, input: RegionSplitInput, triangulate: Tr
         // se ainda deixarem aba (plano quase paralelo à superfície vizinha), os seguintes também.
         const candidates = rankPlanes(island, loop, fit, normal, side, near).slice(0, 8);
         for (const [ci, cand] of candidates.entries()) {
-          if (ci >= 2 && best && best.flap < FLAP_WIDTH && !process.env.OMNISLICE_ALL) break;
+          if (ci >= 2 && best && best.flap < FLAP_WIDTH) break;
           const frame = cand.frame;
           const cutter = arena.track(reg.halfSpace(frame, size, cutId));
           const [pos, neg] = arena.trackAll(A.split(cutter));
@@ -667,13 +665,11 @@ export function splitByRegions(w: Wasm, input: RegionSplitInput, triangulate: Tr
           // Uma aba pesa mais que um pouco de pintura do outro lado do plano.
           const flapPenalty = flap >= FLAP_WIDTH ? 0.3 + 0.05 * (flap - FLAP_WIDTH) : 0;
           const score = purity - 2 * Math.max(0, 0.95 - completeness) - cand.penalty - flapPenalty;
-          if (process.env.OMNISLICE_DEBUG)
-            console.log(`ilha ${islands[island].label} cand ${ci}: n=${frame.normal.map((x) => x.toFixed(3))} o=${frame.origin.map((x) => x.toFixed(2))} pureza ${purity.toFixed(3)} completude ${completeness.toFixed(3)} aba ${flap.toFixed(2)} pen ${cand.penalty.toFixed(3)} nota ${score.toFixed(3)}`);
           if (!best || score > best.score) {
             if (best) free(best.S, ...best.drop);
             best = { frame, S: comps[pick], drop: [neg, ...comps.filter((_, i) => i !== pick)], score, flap };
           } else free(neg, ...comps);
-          if (purity > 0.995 && completeness > 0.95 && flap < FLAP_WIDTH && !process.env.OMNISLICE_ALL) break;
+          if (purity > 0.995 && completeness > 0.95 && flap < FLAP_WIDTH) break;
         }
         if (!best) {
           free(...others);
@@ -771,9 +767,12 @@ export function splitByRegions(w: Wasm, input: RegionSplitInput, triangulate: Tr
         const fit = fitPlane(pts, verts.length);
         if (fit.maxDeviation > 0.35 * Math.max(fit.radius, 1e-6)) irregular = true;
         // A tampa da peça percorre a borda no sentido oposto ao das faces da ilha.
-        const cap = capLoop(verts.slice().reverse(), positions, triangulate, true);
-        if (!cap)
-          throw new GeometryError("O contorno pintado se cruza quando achatado; não dá para tampar sem deformar.", "contorno-cruzado");
+        // Contorno que se cruza quando achatado (ex.: dá a volta num relevo): tampa curva em membrana.
+        let cap = capLoop(verts.slice().reverse(), positions, triangulate, true);
+        if (!cap) {
+          cap = membraneCap(verts.slice().reverse(), positions);
+          irregular = true;
+        }
         const { tris, extraVerts } = cap;
         for (const v of extraVerts) positions.push(v[0], v[1], v[2]);
         // A frente do corte aponta para dentro da ilha (mesma convenção do corte plano).
@@ -1103,7 +1102,40 @@ export interface Interface {
   deviation: number;
 }
 
-function capSection(w: Wasm, g: PartGeometry, tag: number, frame: PlaneFrame): { cs: CrossSection; deviation: number } {
+/**
+ * Tampa curva (contorno que deu a volta num relevo): ajusta o plano só à parte mais plana da tampa,
+ * para que os encaixes fiquem onde as duas peças realmente se apoiam.
+ */
+function seamFrame(g: PartGeometry, tag: number, frame: PlaneFrame): PlaneFrame {
+  const p = g.mesh.positions;
+  const idx = g.mesh.indices;
+  let current = frame;
+  for (let pass = 0; pass < 2; pass++) {
+    const pts: number[] = [];
+    for (let t = 0; t < g.cut.length; t++) {
+      if (g.cut[t] !== tag) continue;
+      const a: Vec3 = [p[idx[t * 3] * 3], p[idx[t * 3] * 3 + 1], p[idx[t * 3] * 3 + 2]];
+      const b: Vec3 = [p[idx[t * 3 + 1] * 3], p[idx[t * 3 + 1] * 3 + 1], p[idx[t * 3 + 1] * 3 + 2]];
+      const c: Vec3 = [p[idx[t * 3 + 2] * 3], p[idx[t * 3 + 2] * 3 + 1], p[idx[t * 3 + 2] * 3 + 2]];
+      const nrm = cross(sub(b, a), sub(c, a));
+      const len = length(nrm);
+      if (len < 1e-12 || Math.abs(dot(nrm, current.normal)) / len < Math.cos(Math.PI / 6)) continue;
+      pts.push(...a, ...b, ...c);
+    }
+    if (pts.length < 9) return current;
+    const fit = fitPlane(pts, pts.length / 3);
+    current = frameFromNormal(fit.centroid, dot(fit.normal, current.normal) < 0 ? scale(fit.normal, -1) : fit.normal);
+  }
+  return current;
+}
+
+function capSection(
+  w: Wasm,
+  g: PartGeometry,
+  tag: number,
+  frame: PlaneFrame,
+  maxDeviation = Infinity,
+): { cs: CrossSection; deviation: number } {
   const polys: Vec2[][] = [];
   let deviation = 0;
   const p = g.mesh.positions;
@@ -1111,12 +1143,15 @@ function capSection(w: Wasm, g: PartGeometry, tag: number, frame: PlaneFrame): {
   for (let t = 0; t < g.cut.length; t++) {
     if (g.cut[t] !== tag) continue;
     const tri: Vec2[] = [];
+    let dev = 0;
     for (let k = 0; k < 3; k++) {
       const v = idx[t * 3 + k] * 3;
       const l = toLocal(frame, [p[v], p[v + 1], p[v + 2]]);
-      deviation = Math.max(deviation, Math.abs(l[2]));
+      dev = Math.max(dev, Math.abs(l[2]));
       tri.push([l[0], l[1]]);
     }
+    if (dev > maxDeviation) continue;
+    deviation = Math.max(deviation, dev);
     const area =
       (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
     if (Math.abs(area) < 1e-12) continue;
@@ -1147,28 +1182,39 @@ export function computeInterfaces(w: Wasm, parts: PartRef[], cuts: CutRecord[], 
     for (const f of entry.front)
       for (const b of entry.back) {
         if (f.id === b.id) continue;
-        const a = capSection(w, f.geometry, cutTag(cut.id, 0), cut.frame);
-        const c = capSection(w, b.geometry, cutTag(cut.id, 1), cut.frame);
-        const contact = a.cs.intersect(c.cs);
-        const simple = contact.simplify(0.01);
-        const area = simple.area();
-        if (area >= minArea) {
+        const contactAt = (frame: PlaneFrame, maxDev: number) => {
+          const a = capSection(w, f.geometry, cutTag(cut.id, 0), frame, maxDev);
+          const c = capSection(w, b.geometry, cutTag(cut.id, 1), frame, maxDev);
+          const contact = a.cs.intersect(c.cs);
+          const simple = contact.simplify(0.01);
+          const result = {
+            frame,
+            area: simple.area(),
+            polygons: simple.toPolygons() as Vec2[][],
+            deviation: Math.max(a.deviation, c.deviation),
+          };
+          a.cs.delete();
+          c.cs.delete();
+          contact.delete();
+          simple.delete();
+          return result;
+        };
+        // Em costuras, os encaixes vão para a parte quase plana da tampa (até 1 mm do plano ajustado);
+        // se ela não existir, usa a tampa inteira projetada no plano do corte.
+        let best = cut.kind === "seam" ? contactAt(seamFrame(f.geometry, cutTag(cut.id, 0), cut.frame), 1) : null;
+        if (!best || best.area < minArea) best = contactAt(cut.frame, Infinity);
+        if (best.area >= minArea)
           out.push({
             id: `${cut.id}:${f.id}:${b.id}`,
             cutId: cut.id,
             kind: cut.kind,
-            frame: cut.frame,
+            frame: best.frame,
             front: f.id,
             back: b.id,
-            polygons: simple.toPolygons() as Vec2[][],
-            area,
-            deviation: Math.max(a.deviation, c.deviation),
+            polygons: best.polygons,
+            area: best.area,
+            deviation: best.deviation,
           });
-        }
-        a.cs.delete();
-        c.cs.delete();
-        contact.delete();
-        simple.delete();
       }
   }
   return out;

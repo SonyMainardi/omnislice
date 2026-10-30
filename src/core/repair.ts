@@ -146,6 +146,67 @@ function fanTriangulate(loop: number[], positions: number[]): { tris: number[]; 
 }
 
 /**
+ * Tampa não plana para contornos que se cruzam quando projetados: anéis concêntricos do laço até um
+ * centro, relaxados como uma membrana (laplaciano com a borda fixa). Funciona com qualquer laço
+ * fechado, mesmo os que dão a volta em relevos; a superfície fica curva, mas sem dobras.
+ */
+export function membraneCap(loop: number[], positions: number[]): { tris: number[]; extraVerts: Vec3[] } {
+  const n = loop.length;
+  const rings = Math.max(2, Math.min(16, Math.round(n / 8)));
+  const c: Vec3 = [0, 0, 0];
+  for (const v of loop) for (let a = 0; a < 3; a++) c[a] += positions[v * 3 + a] / n;
+  // pts[k][i]: anel k (0 = borda fixa), vértice i; o último ponto é o centro.
+  const pts = new Float64Array((rings + 1) * n * 3 + 3);
+  for (let i = 0; i < n; i++)
+    for (let k = 0; k <= rings; k++) {
+      const t = 1 - k / (rings + 1);
+      for (let a = 0; a < 3; a++) pts[(k * n + i) * 3 + a] = c[a] + t * (positions[loop[i] * 3 + a] - c[a]);
+    }
+  const ci = (rings + 1) * n;
+  pts.set(c, ci * 3);
+  const next = new Float64Array(pts.length);
+  for (let it = 0; it < 300; it++) {
+    next.set(pts);
+    for (let k = 1; k <= rings; k++)
+      for (let i = 0; i < n; i++) {
+        const o = (k * n + i) * 3;
+        const l = (k * n + ((i + n - 1) % n)) * 3;
+        const r = (k * n + ((i + 1) % n)) * 3;
+        const u = ((k - 1) * n + i) * 3;
+        const d = k === rings ? ci * 3 : ((k + 1) * n + i) * 3;
+        for (let a = 0; a < 3; a++) next[o + a] = (pts[l + a] + pts[r + a] + pts[u + a] + pts[d + a]) / 4;
+      }
+    for (let a = 0; a < 3; a++) {
+      let s = 0;
+      for (let i = 0; i < n; i++) s += pts[(rings * n + i) * 3 + a];
+      next[ci * 3 + a] = s / n;
+    }
+    pts.set(next);
+  }
+  const base = positions.length / 3;
+  const extraVerts: Vec3[] = [];
+  for (let k = 1; k <= rings; k++)
+    for (let i = 0; i < n; i++) {
+      const o = (k * n + i) * 3;
+      extraVerts.push([pts[o], pts[o + 1], pts[o + 2]]);
+    }
+  extraVerts.push([pts[ci * 3], pts[ci * 3 + 1], pts[ci * 3 + 2]]);
+  const id = (k: number, i: number) => (k === 0 ? loop[i % n] : base + (k - 1) * n + (i % n));
+  const center = base + rings * n;
+  const tris: number[] = [];
+  for (let k = 0; k < rings; k++)
+    for (let i = 0; i < n; i++) {
+      const a = id(k, i);
+      const b = id(k, i + 1);
+      const cc = id(k + 1, i + 1);
+      const d = id(k + 1, i);
+      tris.push(a, b, cc, a, cc, d);
+    }
+  for (let i = 0; i < n; i++) tris.push(id(rings, i), id(rings, i + 1), center);
+  return { tris, extraVerts };
+}
+
+/**
  * Fecha um laço de vértices (já na ordem das novas faces) projetando-o no plano de melhor ajuste.
  * Devolve triângulos com índices globais e vértices extras eventualmente criados.
  */

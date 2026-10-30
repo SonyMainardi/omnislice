@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { analyzeMesh } from "../src/core/analysis";
+import { applyConnectors, defaultConnectorSettings, planConnectors } from "../src/core/connectors";
 import { RunRegistry, type Wasm, getManifold } from "../src/core/manifoldBridge";
 import { frameFromNormal } from "../src/core/math";
 import { type IndexedMesh, faceCentroids, signedVolume, triCount } from "../src/core/mesh";
@@ -166,6 +167,66 @@ describe("divisão por regiões", () => {
     }
     expect(Math.abs(sum - total) / total).toBeLessThan(1e-3);
     expect(result.cuts[0].kind).toBe("seam");
+  });
+
+  it("modo contorno tampa uma faixa que se cruza quando achatada", () => {
+    const sphere = w.Manifold.sphere(20, 96);
+    const mm = sphere.getMesh();
+    const mesh: IndexedMesh = { positions: new Float32Array(mm.vertProperties), indices: new Uint32Array(mm.triVerts) };
+    sphere.delete();
+    const c = faceCentroids(mesh);
+    const labels = new Uint16Array(triCount(mesh));
+    for (let t = 0; t < labels.length; t++) {
+      const phi = Math.atan2(c[t * 3 + 1], c[t * 3]) + Math.PI;
+      if (Math.abs(c[t * 3 + 2]) < 6 && phi > 0.4 && phi < 5.6) labels[t] = 1;
+    }
+    const total = volumeOf(mesh);
+    const result = splitByRegions(
+      w,
+      { geometry: geometryFromMesh(mesh), labels, separate: [1], baseLabel: 0, mode: "seam", firstCutId: 1 },
+      wasmTriangulator(w),
+    );
+    expect(result.islands[0].method).toBe("contorno");
+    expect(result.islands[0].message).toMatch(/irregular/);
+    expect(result.parts).toHaveLength(2);
+    let sum = 0;
+    for (const p of result.parts) {
+      expect(analyzeMesh(p.geometry.mesh).watertight).toBe(true);
+      expect(volumeOf(p.geometry.mesh)).toBeGreaterThan(0);
+      sum += volumeOf(p.geometry.mesh);
+    }
+    expect(Math.abs(sum - total) / total).toBeLessThan(1e-3);
+  });
+
+  it("encaixes sobre uma costura ondulada usam a parte plana da tampa", () => {
+    const sphere = w.Manifold.sphere(20, 96);
+    const mm = sphere.getMesh();
+    const mesh: IndexedMesh = { positions: new Float32Array(mm.vertProperties), indices: new Uint32Array(mm.triVerts) };
+    sphere.delete();
+    const c = faceCentroids(mesh);
+    const labels = new Uint16Array(triCount(mesh));
+    for (let t = 0; t < labels.length; t++)
+      if (c[t * 3 + 2] > 4 * Math.sin(3 * Math.atan2(c[t * 3 + 1], c[t * 3]))) labels[t] = 1;
+    const result = splitByRegions(
+      w,
+      { geometry: geometryFromMesh(mesh), labels, separate: [1], baseLabel: 0, mode: "seam", firstCutId: 1 },
+      wasmTriangulator(w),
+    );
+    expect(result.parts).toHaveLength(2);
+    const parts = result.parts.map((p) => ({ id: String(p.label), geometry: p.geometry }));
+    const [iface] = computeInterfaces(w, parts, result.cuts);
+    expect(iface).toBeDefined();
+    const byId = (id: string) => parts.find((p) => p.id === id)!.geometry;
+    const plan = planConnectors(w, {
+      iface,
+      front: byId(iface.front),
+      back: byId(iface.back),
+      settings: { ...defaultConnectorSettings, kind: "cylinder", count: 1 },
+    });
+    expect(plan.points.length).toBeGreaterThan(0);
+    const applied = applyConnectors(w, parts, [iface], [plan]);
+    expect(applied.checks[0].ok).toBe(true);
+    for (const g of applied.parts.values()) expect(analyzeMesh(g.mesh).watertight).toBe(true);
   });
 
   it("preserva a origem das faces para cores e materiais", () => {

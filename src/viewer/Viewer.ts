@@ -43,7 +43,7 @@ interface PartView {
   connectors: THREE.Group;
 }
 
-export type PaintTool = "orbitar" | "pincel" | "borracha" | "balde" | "casca" | "atributo" | "plano";
+export type PaintTool = "orbitar" | "pincel" | "borracha" | "inteligente" | "balde" | "casca" | "atributo" | "plano";
 
 const tmpColor = new THREE.Color();
 

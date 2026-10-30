@@ -11,7 +11,7 @@ import type { FaceAttributes, PartStats } from "../worker/protocol";
 
 export type Stage = "modelo" | "dividir" | "encaixes" | "impressao" | "exportar";
 
-export type Tool = "orbitar" | "pincel" | "borracha" | "balde" | "casca" | "atributo" | "plano";
+export type Tool = "orbitar" | "pincel" | "borracha" | "inteligente" | "balde" | "casca" | "atributo" | "plano";
 
 export interface Part {
   id: string;
@@ -141,7 +141,7 @@ export const emptyDoc: Doc = {
   splitReport: null,
 };
 
-const initialUi: UiState = {
+export const initialUi: UiState = {
   stage: "modelo",
   tool: "orbitar",
   brushRadius: 4,

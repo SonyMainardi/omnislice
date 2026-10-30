@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type { Mat4, PlaneFrame } from "../core/math";
 import { Viewer, type ViewerPart } from "../viewer/Viewer";
 import { ensureRegionSession, commitLabels, partAttributes, selectPart } from "./actions";
-import { attributeFaces, brushFaces, fillFaces, paintContext, shellFaces } from "./painting";
+import { attributeFaces, brushFaces, fillFaces, paintContext, shellFaces, smartFaces } from "./painting";
 import { type AppState, setUi, store, useApp } from "./state";
 
-const PAINT_TOOLS = new Set(["pincel", "borracha", "balde", "casca", "atributo"]);
+const PAINT_TOOLS = new Set(["pincel", "borracha", "inteligente", "balde", "casca", "atributo"]);
 
 function regionColorArray(s: AppState["doc"]["regions"]): string[] {
   if (!s) return [];
@@ -187,6 +187,9 @@ export function ViewerPane() {
       case "pincel":
       case "borracha":
         faces = brushFaces(ctx, hit.face, hit.point, ui.brushRadius, ui.frontOnly ? hit.viewDir : undefined);
+        break;
+      case "inteligente":
+        if (phase === "down") faces = smartFaces(ctx, hit.face);
         break;
       case "balde":
         if (phase === "down") faces = fillFaces(ctx, hit.face, st.labels, ui.fillAngle);

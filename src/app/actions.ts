@@ -31,6 +31,7 @@ import {
   type RegionSession,
   commit,
   emptyDoc,
+  initialUi,
   newPartId,
   patchDoc,
   setUi,
@@ -265,6 +266,14 @@ export async function restoreOriginal() {
 // ---------------------------------------------------------------------------------------------
 // Peças
 // ---------------------------------------------------------------------------------------------
+
+/** Fecha o modelo atual (sem recarregar a página) para abrir outro. */
+export function closeModel() {
+  const s = store.get();
+  if (s.doc.parts.length > 1 && !window.confirm("Fechar o modelo? As peças e cortes atuais serão descartados.")) return;
+  store.set({ doc: emptyDoc, past: [], future: [], ui: { ...initialUi, segmentation: s.ui.segmentation, toasts: s.ui.toasts } });
+  invalidateDerived();
+}
 
 export function selectPart(id: string | null) {
   setUi({ selectedPartId: id });

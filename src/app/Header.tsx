@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { APP_NAME } from "./brand";
-import { openFile, restoreOriginal } from "./actions";
+import { closeModel, openFile, restoreOriginal } from "./actions";
 import { ACCEPTED } from "./importers";
 import { type Stage, redo, setUi, undo, useApp } from "./state";
 
@@ -61,6 +61,9 @@ export function Header() {
             </button>
             <button type="button" disabled={busy} onClick={() => setUi({ stage: "exportar", tool: "orbitar", planeFrame: null })} title="STL, 3MF, OBJ e ZIP">
               Exportar
+            </button>
+            <button type="button" disabled={busy} onClick={closeModel} title="Fecha este modelo para abrir outro">
+              ✕ Fechar modelo
             </button>
           </>
         )}

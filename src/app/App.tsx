@@ -13,7 +13,7 @@ import { type Tool, redo, setUi, store, undo, useApp } from "./state";
 import { fmtSize } from "./ui";
 import { ViewerPane } from "./ViewerPane";
 
-const SHORTCUTS: Record<string, Tool> = { o: "orbitar", b: "pincel", e: "borracha", g: "balde", c: "casca", m: "atributo" };
+const SHORTCUTS: Record<string, Tool> = { o: "orbitar", b: "pincel", e: "borracha", s: "inteligente", g: "balde", c: "casca", m: "atributo" };
 
 export function App() {
   const hasModel = useApp((s) => s.doc.model !== null);

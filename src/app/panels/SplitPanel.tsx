@@ -32,8 +32,14 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: "orbitar", label: "Navegar", key: "O", hint: "Girar e aproximar a vista (botão esquerdo)" },
   { id: "pincel", label: "Pincel", key: "B", hint: "Pinta a região ativa. Botão direito gira a vista." },
   { id: "borracha", label: "Borracha", key: "E", hint: "Devolve as faces para o corpo principal" },
-  { id: "balde", label: "Balde", key: "G", hint: "Preenche até encontrar arestas vivas (ângulo ajustável)" },
-  { id: "casca", label: "Casca", key: "C", hint: "Seleciona uma casca inteira (peças modeladas à parte)" },
+  {
+    id: "inteligente",
+    label: "Seleção inteligente",
+    key: "S",
+    hint: "Clique numa parte (cabeça, braço, perna...): detecta os vincos em volta e pinta a parte inteira",
+  },
+  { id: "balde", label: "Balde", key: "G", hint: "Preenche até encontrar arestas vivas. Em modelos orgânicos, sem arestas vivas, pinta tudo" },
+  { id: "casca", label: "Casca", key: "C", hint: "Seleciona uma casca solta inteira (só separa peças modeladas à parte)" },
   { id: "atributo", label: "Cor/Material", key: "M", hint: "Seleciona faces pela cor, material ou objeto do arquivo" },
 ];
 
@@ -317,6 +323,12 @@ export function SplitPanel() {
                 </Field>
                 <Toggle label="Só faces visíveis" checked={frontOnly} onChange={(v) => setUi({ frontOnly: v })} />
               </>
+            )}
+            {tool === "inteligente" && (
+              <Hint>
+                Clique na parte que quer separar. A seleção para nos vincos onde ela encontra o resto do modelo; ajuste o resultado
+                com o pincel ou a borracha.
+              </Hint>
             )}
             {tool === "balde" && (
               <Field label="Parar em arestas acima de">
