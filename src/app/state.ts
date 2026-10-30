@@ -8,6 +8,7 @@ import type { PartGeometry } from "../core/part";
 import type { CutRecord, IslandReport, Interface, SplitMode } from "../core/split";
 import type { AppliedConnectorsResult } from "./types";
 import type { FaceAttributes, PartStats } from "../worker/protocol";
+import { log } from "./log";
 
 export type Stage = "modelo" | "dividir" | "encaixes" | "impressao" | "exportar";
 
@@ -228,8 +229,10 @@ export function useApp<T>(selector: (s: AppState) => T): T {
 }
 
 let toastSeq = 0;
+const toastLevel = { sucesso: "info", info: "info", aviso: "aviso", erro: "erro" } as const;
 export function toast(kind: Toast["kind"], text: string, ms = 5000) {
   const id = ++toastSeq;
+  log(toastLevel[kind], `Mensagem: ${text}`);
   setUi((ui) => ({ toasts: [...ui.toasts, { id, kind, text }].slice(-5) }));
   if (ms > 0) setTimeout(() => setUi((ui) => ({ toasts: ui.toasts.filter((t) => t.id !== id) })), ms);
 }

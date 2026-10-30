@@ -21,6 +21,7 @@ import type { CutRecord, SplitMode } from "../core/split";
 import { CancelledError, geometry } from "../worker/client";
 import type { ExportGroup, ExportItem, FaceAttributes } from "../worker/protocol";
 import { parseGLTF, parsePLY } from "./importers";
+import { log } from "./log";
 import { paintContext } from "./painting";
 import { NEUTRAL, nextColor, paletteColor } from "./palette";
 import {
@@ -46,11 +47,19 @@ import type { AppliedConnectorsResult } from "./types";
 
 async function run<T>(label: string, fn: (progress: (f: number, l?: string) => void) => Promise<T>): Promise<T | undefined> {
   setUi({ busy: { label, fraction: 0, cancellable: true } });
+  const t0 = performance.now();
+  const ms = () => `${Math.round(performance.now() - t0)} ms`;
+  log("acao", `Início: ${label}`);
   try {
-    return await fn((fraction, l) => setUi({ busy: { label: l || label, fraction, cancellable: true } }));
+    const result = await fn((fraction, l) => setUi({ busy: { label: l || label, fraction, cancellable: true } }));
+    log("acao", `Fim: ${label} (${ms()})`);
+    return result;
   } catch (e) {
-    if (e instanceof CancelledError) toast("aviso", "Operação cancelada.");
-    else {
+    if (e instanceof CancelledError) {
+      log("aviso", `Cancelado: ${label} (${ms()})`);
+      toast("aviso", "Operação cancelada.");
+    } else {
+      log("erro", `Falhou: ${label} (${ms()})`, e);
       console.error(e);
       toast("erro", (e as Error).message || String(e), 10000);
     }
@@ -127,6 +136,7 @@ async function installModel(model: ModelState, fresh: boolean) {
 
 export async function openFile(file: File) {
   const ext = file.name.toLowerCase().split(".").pop() ?? "";
+  log("acao", `Abrir arquivo ${file.name}`, { bytes: file.size });
   await run(`Abrindo ${file.name}`, async (progress) => {
     const buffer = await file.arrayBuffer();
     let parsed: ParsedModel;
@@ -152,6 +162,7 @@ export async function openFile(file: File) {
       true,
     );
     const r = prepared.report;
+    log("info", "Modelo carregado", { relatorio: r, notas: prepared.notes, manifold: prepared.manifoldOk });
     toast(
       r.watertight ? "sucesso" : "aviso",
       r.watertight
@@ -535,6 +546,12 @@ export async function applyRegionSplit(mode: SplitMode) {
     toast("aviso", missing.length ? "As regiões marcadas ainda não têm faces pintadas." : "Marque ao menos uma região para separar.");
     return;
   }
+  log("acao", "Gerar peças por regiões", {
+    modo: mode,
+    triangulos: part.stats.triangles,
+    regioes: s.regions.map((r) => ({ id: r.id, nome: r.name, separar: r.separate })),
+    base: s.baseId,
+  });
   await run("Dividindo em peças", async (progress) => {
     const res = await geometry.call(
       "splitRegions",

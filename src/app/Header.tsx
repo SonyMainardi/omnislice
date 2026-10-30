@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { APP_NAME } from "./brand";
 import { closeModel, openFile, restoreOriginal } from "./actions";
 import { ACCEPTED } from "./importers";
+import { downloadLog } from "./log";
 import { type Stage, redo, setUi, undo, useApp } from "./state";
 
 export const STAGES: { id: Stage; label: string; hint: string }[] = [
@@ -67,6 +68,9 @@ export function Header() {
             </button>
           </>
         )}
+        <button type="button" onClick={downloadLog} title="Baixa o registro de atividade para enviar ao suporte">
+          Baixar log
+        </button>
         <button type="button" className="primary" disabled={busy} onClick={() => input.current?.click()}>
           Abrir arquivo
         </button>
