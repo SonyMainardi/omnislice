@@ -25,7 +25,7 @@ import {
 } from "../core/mesh";
 import { CONNECTOR_TAG, type PartGeometry } from "../core/part";
 import { voxelRemesh } from "../core/remesh";
-import { repairMesh } from "../core/repair";
+import { orientConsistently, repairMesh } from "../core/repair";
 import { buildSampleFigure } from "../core/sample";
 import { computeInterfaces, cutByPlane, splitByRegions, splitComponents, unionParts, wasmTriangulator } from "../core/split";
 import { localProviders, remoteProvider } from "../segmentation/providers";
@@ -104,7 +104,17 @@ const handlers: { [K in OpName]: Handler<K> } = {
     // Formatos Y-para-cima (OBJ, GLB) são girados para Z-para-cima, a convenção das impressoras.
     if (rotateYUp) mesh = transformMesh(mesh, rotationAxisAngle([1, 0, 0], 90));
     mesh = normalizePlacement(mesh);
-    const report = analyzeMesh(mesh);
+    let report = analyzeMesh(mesh);
+    const notes = [...parsed.notes];
+    // Poucas faces invertidas (comum em GLB de IA) impedem o Manifold de cortar; corrigir não muda a forma.
+    if (report.inconsistentEdges > 0) {
+      const oriented = orientConsistently(mesh);
+      if (oriented.flipped) {
+        mesh = oriented.mesh;
+        report = analyzeMesh(mesh);
+        notes.push(`${oriented.flipped} face(s) com orientação invertida foram corrigidas automaticamente.`);
+      }
+    }
     return {
       mesh,
       report,
@@ -116,7 +126,7 @@ const handlers: { [K in OpName]: Handler<K> } = {
         objects: parsed.faceObjects,
         objectNames: parsed.objectNames,
       },
-      notes: parsed.notes,
+      notes,
     };
   },
 
