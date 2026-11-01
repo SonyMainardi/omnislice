@@ -1,5 +1,5 @@
 import type { Manifold } from "manifold-3d";
-import { type IndexedMesh, computeBounds, faceComponents, triCount } from "./mesh";
+import { type IndexedMesh, faceComponents, triCount } from "./mesh";
 import type { PartGeometry } from "./part";
 
 /**
@@ -114,13 +114,18 @@ export function shellNesting(mesh: IndexedMesh, neighbors?: Int32Array): ShellIn
   for (const s of shells) s.signedVolume = shellVolume(mesh, s.faces);
   if (count < 2) return shells;
   const boxes = shells.map((s) => {
-    const pts: number[] = [];
+    const min: [number, number, number] = [Infinity, Infinity, Infinity];
+    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
     for (const f of s.faces)
       for (let k = 0; k < 3; k++) {
         const v = mesh.indices[f * 3 + k] * 3;
-        pts.push(mesh.positions[v], mesh.positions[v + 1], mesh.positions[v + 2]);
+        for (let a = 0; a < 3; a++) {
+          const x = mesh.positions[v + a];
+          if (x < min[a]) min[a] = x;
+          if (x > max[a]) max[a] = x;
+        }
       }
-    return computeBounds(pts);
+    return { min, max };
   });
   const containers: number[][] = shells.map(() => []);
   for (let i = 0; i < count; i++) {
@@ -222,23 +227,33 @@ export function decomposeSolids(m: Manifold): Manifold[] {
 }
 
 /** Subconjunto de faces de uma peça, com atributos e vértices compactados. */
-export function subsetGeometry(g: PartGeometry, faces: number[]): PartGeometry {
+export function subsetGeometry(g: PartGeometry, faces: ArrayLike<number>): PartGeometry {
   const remap = new Int32Array(g.mesh.positions.length / 3).fill(-1);
-  const positions: number[] = [];
+  const order = new Int32Array(faces.length * 3);
   const indices = new Uint32Array(faces.length * 3);
   const src = new Int32Array(faces.length);
   const cut = new Int32Array(faces.length);
-  faces.forEach((f, i) => {
+  let nv = 0;
+  for (let i = 0; i < faces.length; i++) {
+    const f = faces[i];
     for (let k = 0; k < 3; k++) {
       const v = g.mesh.indices[f * 3 + k];
       if (remap[v] < 0) {
-        remap[v] = positions.length / 3;
-        positions.push(g.mesh.positions[v * 3], g.mesh.positions[v * 3 + 1], g.mesh.positions[v * 3 + 2]);
+        remap[v] = nv;
+        order[nv++] = v;
       }
       indices[i * 3 + k] = remap[v];
     }
     src[i] = g.src[f];
     cut[i] = g.cut[f];
-  });
-  return { mesh: { positions: new Float32Array(positions), indices }, src, cut };
+  }
+  const positions = new Float32Array(nv * 3);
+  const p = g.mesh.positions;
+  for (let i = 0; i < nv; i++) {
+    const v = order[i] * 3;
+    positions[i * 3] = p[v];
+    positions[i * 3 + 1] = p[v + 1];
+    positions[i * 3 + 2] = p[v + 2];
+  }
+  return { mesh: { positions, indices }, src, cut };
 }

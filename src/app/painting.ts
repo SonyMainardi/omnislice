@@ -9,8 +9,10 @@ export interface PaintContext {
   centroids: Float32Array;
   normals: Float32Array;
   areas: Float32Array;
-  /** Normais suavizadas na escala das partes do modelo (calculadas na primeira seleção inteligente). */
+  /** Normais suavizadas na escala das partes do modelo (calculadas casca a casca, na primeira seleção inteligente). */
   smooth?: Float32Array;
+  /** Faces cujas normais suavizadas já foram calculadas. */
+  smoothDone?: Uint8Array;
 }
 
 const cache = new WeakMap<IndexedMesh, PaintContext>();
@@ -78,21 +80,28 @@ export function fillFaces(ctx: PaintContext, start: number, labels: Uint16Array,
   return out;
 }
 
-/** Normais por face suavizadas por difusão até um raio de ~1/150 do modelo (ignora rugas finas). */
-function smoothNormals(ctx: PaintContext, diag: number): Float32Array {
-  if (ctx.smooth) return ctx.smooth;
+/**
+ * Normais por face suavizadas por difusão até um raio de ~1/150 do modelo (ignora rugas finas).
+ * A difusão nunca sai de uma casca, e a seleção inteligente também não: só a casca da face clicada
+ * é calculada (num arquivo com várias cascas, o primeiro clique não processa o modelo inteiro).
+ */
+function smoothNormals(ctx: PaintContext, diag: number, start: number): Float32Array {
   const { normals, areas, neighbors } = ctx;
   const n = areas.length;
+  if (ctx.smooth && ctx.smoothDone?.[start]) return ctx.smooth;
+  const faces = shellFaces(ctx, start);
   let total = 0;
   for (let f = 0; f < n; f++) total += areas[f];
   const h = Math.sqrt((2 * total) / Math.max(n, 1));
   // Malhas grossas (CAD) não precisam: a média com triângulos-lasca distorce as normais.
   const wanted = Math.round((diag / 150 / h) ** 2);
   const iterations = wanted < 3 ? 0 : Math.min(60, wanted);
+  ctx.smooth ??= Float32Array.from(normals);
+  ctx.smoothDone ??= new Uint8Array(n);
   let cur = Float32Array.from(normals);
   let next = new Float32Array(cur.length);
   for (let it = 0; it < iterations; it++) {
-    for (let f = 0; f < n; f++) {
+    for (const f of faces) {
       let x = cur[f * 3] * areas[f];
       let y = cur[f * 3 + 1] * areas[f];
       let z = cur[f * 3 + 2] * areas[f];
@@ -110,8 +119,13 @@ function smoothNormals(ctx: PaintContext, diag: number): Float32Array {
     }
     [cur, next] = [next, cur];
   }
-  ctx.smooth = cur;
-  return cur;
+  for (const f of faces) {
+    ctx.smooth[f * 3] = cur[f * 3];
+    ctx.smooth[f * 3 + 1] = cur[f * 3 + 1];
+    ctx.smooth[f * 3 + 2] = cur[f * 3 + 2];
+    ctx.smoothDone[f] = 1;
+  }
+  return ctx.smooth;
 }
 
 /**
@@ -131,7 +145,7 @@ export function smartFaces(ctx: PaintContext, start: number): number[] {
       hi[a] = Math.max(hi[a], c[f * 3 + a]);
     }
   const diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
-  const sn = smoothNormals(ctx, diag);
+  const sn = smoothNormals(ctx, diag, start);
   // Custo de um radiano de vinco côncavo, em mm de caminho.
   const crease = diag * 0.5;
 

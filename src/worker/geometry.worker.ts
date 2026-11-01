@@ -186,8 +186,8 @@ const handlers: { [K in OpName]: Handler<K> } = {
 
   async splitRegions(args, progress) {
     const w = await getManifold();
-    progress(0.1, "Cortando as regiões");
-    const r = splitByRegions(w, args, wasmTriangulator(w));
+    progress(0.05, "Preparando a divisão");
+    const r = splitByRegions(w, args, wasmTriangulator(w), (f, label) => progress(0.05 + 0.85 * f, label));
     progress(0.9, "Conferindo as peças");
     return {
       parts: r.parts.map((p) => ({ label: p.label, geometry: p.geometry, stats: statsOf(w, p.geometry) })),

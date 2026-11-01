@@ -56,6 +56,20 @@ export function cleanLabels(
   opts: { minIslandArea: number; minIslandFaces: number; smoothIterations: number },
 ): Uint16Array {
   const out = labels.slice();
+  absorbSmallIslands(out, neighbors, areas, opts);
+  // A suavização troca todas as faces ao mesmo tempo e pode deixar faces isoladas (padrão
+  // "xadrez" em fronteiras serrilhadas): uma nova absorção remove essas ilhas de uma face, que
+  // virariam laços de costura minúsculos no corte.
+  if (smoothBorders(out, neighbors, opts.smoothIterations)) absorbSmallIslands(out, neighbors, areas, opts);
+  return out;
+}
+
+function absorbSmallIslands(
+  out: Uint16Array,
+  neighbors: Int32Array,
+  areas: Float32Array,
+  opts: { minIslandArea: number; minIslandFaces: number },
+): void {
   for (let pass = 0; pass < 3; pass++) {
     const { islands, islandOf } = labelIslands(out, neighbors, areas);
     if (islands.length <= 1) break;
@@ -89,7 +103,12 @@ export function cleanLabels(
     }
     if (!changed) break;
   }
-  for (let it = 0; it < opts.smoothIterations; it++) {
+}
+
+/** Reentrâncias de uma face: a face com dois vizinhos de outro rótulo passa a ser dele. */
+function smoothBorders(out: Uint16Array, neighbors: Int32Array, iterations: number): boolean {
+  let any = false;
+  for (let it = 0; it < iterations; it++) {
     let changed = 0;
     const prev = out.slice();
     for (let f = 0; f < prev.length; f++) {
@@ -110,8 +129,9 @@ export function cleanLabels(
       }
     }
     if (!changed) break;
+    any = true;
   }
-  return out;
+  return any;
 }
 
 export interface BoundaryLoop {

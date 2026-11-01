@@ -81,6 +81,7 @@ export function SplitPanel() {
   }, [part, attrs]);
   const areas = useMemo(() => (regions && part ? regionAreas(regions, part) : new Map<number, number>()), [regions, part]);
   if (!part) return null;
+  const shellCount = part.stats.components;
 
   const setTool = (t: Tool) => {
     if (t !== "orbitar" && t !== "plano" && !store.get().doc.regions) ensureRegionSession();
@@ -328,6 +329,12 @@ export function SplitPanel() {
               <Hint>
                 Clique na parte que quer separar. A seleção para nos vincos onde ela encontra o resto do modelo; ajuste o resultado
                 com o pincel ou a borracha.
+              </Hint>
+            )}
+            {(tool === "inteligente" || tool === "pincel") && shellCount > 1 && (
+              <Hint>
+                Esta peça tem {shellCount} cascas separadas (partes modeladas à parte, como chapéu, olhos ou acessórios). Para pintar
+                uma delas inteira com um clique, use a ferramenta <strong>Casca</strong> (C).
               </Hint>
             )}
             {tool === "balde" && (

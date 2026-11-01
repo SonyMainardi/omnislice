@@ -266,9 +266,18 @@ export function verifyCut(w: Wasm, input: CutVerifyInput, over?: Partial<VerifyT
     }
 
     // Partição: as peças somam o volume de antes, não se sobrepõem e, juntas, são a peça de antes.
-    const valid = solids.filter((s): s is Manifold => s !== null);
+    // Cascas que se cruzam dentro de uma mesma malha (logotipo cravado num chapéu, peças de um 3MF
+    // multipartes) não são uma entrada válida para booleanas: cada sólido é unido antes de comparar.
+    const flat = (m: Manifold): Manifold => {
+      const pieces = decomposeSolids(m);
+      if (pieces.length < 2) return m;
+      arena.trackAll(pieces);
+      return arena.track(w.Manifold.union(pieces));
+    };
+    const valid = solids.filter((s): s is Manifold => s !== null).map(flat);
+    const flatOriginal = flat(original);
     if (valid.length === solids.length) {
-      const vSum = valid.reduce((s, m) => s + m.volume(), 0);
+      const vSum = solids.reduce((s, m) => s + (m?.volume() ?? 0), 0);
       const dv = Math.abs(vSum - vOrig);
       list.add(
         "volume-conservado",
@@ -296,8 +305,8 @@ export function verifyCut(w: Wasm, input: CutVerifyInput, over?: Partial<VerifyT
         `maior sobreposição ${fmt(worstOverlap)} mm³${pair ? ` (${pair})` : ""}`,
       );
       const union = arena.track(w.Manifold.union(valid));
-      const missing = Math.abs(arena.track(original.subtract(union)).volume());
-      const extra = Math.abs(arena.track(union.subtract(original)).volume());
+      const missing = Math.abs(arena.track(flatOriginal.subtract(union)).volume());
+      const extra = Math.abs(arena.track(union.subtract(flatOriginal)).volume());
       list.add(
         "posicao-original",
         "Montadas, as peças voltam exatamente à forma e à posição de antes",

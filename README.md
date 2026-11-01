@@ -33,9 +33,15 @@ um servidor próprio). O teste `e2e` usa o Chromium do cache do Playwright ou o 
      inteira e seleção por cor, material ou objeto do arquivo (incluindo 3MF pintado no Bambu Studio
      ou PrusaSlicer e GLB texturizado).
    - *Corte por plano*: plano com alças de mover/girar e prévia ao vivo (frente azul, verso laranja).
+     Só as cascas que o plano atravessa são cortadas; as outras vão inteiras para o lado delas.
    - "Gerar peças" corta cada junção por um plano ajustado ao contorno, ou segue o contorno pintado
      quando o plano atravessaria outra parte. As faces de corte são fechadas e cada peça é validada
      como sólido estanque.
+   - Arquivos com várias cascas (3MF multipartes, acessórios e detalhes modelados à parte, vários
+     objetos no projeto): uma casca pintada inteira vira peça sem nenhuma booleana, e só as cascas
+     com mais de uma região pintada são cortadas, cada uma sozinha. Acessórios soltos sem pintura
+     cravados numa única região separada (o logotipo de um chapéu, uma espada na mão) vão junto
+     com ela.
 3. **Encaixes**:
    - Tipos: pino cilíndrico, quadrado, sextavado ou em D; cavilha avulsa; alojamento para ímã.
    - Tamanho e comprimento automáticos (pela seção do corte e pela espessura medida) ou manuais.
@@ -102,13 +108,16 @@ Provedores incluídos:
 
 ## Testes
 
-- `npm test` — 36 testes do núcleo:
+- `npm test` — 52 testes do núcleo:
   - análise e reparo;
   - cortes e divisão por regiões (com e sem segmentação automática, de 5 mil a mais de 100 mil triângulos);
   - encaixes, incluindo colisão, parede vazada, cavilha, ímã e conflito entre cortes;
   - STL, OBJ e 3MF de ida e volta, inclusive 3MF pintado com componentes;
   - mesa, inclusive a orientação escolhida à mão;
-  - qualidade das peças (sem lascas, base cortada no topo plano).
+  - qualidade das peças (sem lascas, base cortada no topo plano);
+  - arquivos com várias cascas: casca inteira sem booleanas, acessório cravado, acessório com folga,
+    objeto oco, pedestal, casca dividida entre duas regiões, corte por plano só nas cascas que ele
+    atravessa, andamento e limpeza da pintura.
 - `npm run e2e` — abre o app num Chromium real e percorre:
   - carregar o exemplo, analisar e gerar as peças;
   - cortar uma peça por plano;
@@ -123,9 +132,14 @@ Provedores incluídos:
 - Malhas que não são sólidos fechados precisam passar pelo reparo (ou pela reconstrução por voxels)
   antes de dividir. Buracos maiores que ~2 células de voxel impedem a reconstrução.
 - Cortes por contorno (não planos) geram tampas que acompanham a pintura: são válidas, mas menos
-  bonitas que cortes planos e podem deixar o pino inclinado.
+  bonitas que cortes planos e podem deixar o pino inclinado. Quando a fronteira pintada é irregular
+  demais (a tampa atravessaria a superfície ou fecharia um vão por fora), o corte usa um plano ou a
+  região não é separada, com uma mensagem explicando como ajustar a pintura.
+- Cascas que se cruzam no arquivo continuam se cruzando depois da divisão (o OmniSlice não recorta
+  uma peça para abrir espaço para a outra).
 - A massa é uma estimativa simples (paredes de 1,2 mm + preenchimento); use o fatiador para o valor real.
-- Divisão de malhas acima de ~400 mil triângulos leva dezenas de segundos.
+- Divisão de malhas de casca única acima de ~400 mil triângulos leva dezenas de segundos (cerca de
+  20 s com 2 milhões de triângulos); em arquivos com várias cascas, só as cascas cortadas pesam.
 - GLB comprimido (Draco/Meshopt) e PLY de nuvem de pontos não são lidos.
 
 A análise dos sites de referência feita com o REA está em [docs/analise-concorrentes.md](docs/analise-concorrentes.md).
