@@ -312,7 +312,23 @@ function planOne(w: Wasm, input: PlanInput): ConnectorPlan {
     const margin = settings.edgeMargin;
     const isMagnet = settings.kind === "magnet";
     let size = settings.size ?? (isMagnet ? 6 : clamp(Math.round(radii[0] * 0.8 * 2) / 2, 2, 12));
+    // Maior encaixe que a região mais larga do corte comporta, com a parede mínima em volta.
+    const widest = Math.max(...radii);
+    const largest = Math.floor((widest - margin) * 4) / 2;
     if (settings.size === null && !isMagnet && size / 2 + margin > radii[0]) size = Math.floor((radii[0] - margin) * 4) / 2;
+    // Um tamanho escolhido à mão vale para todos os cortes (padrão) ou foi pensado para outro corte:
+    // onde ele não cabe, o pino é reduzido em vez de sumir (antes, aumentar o pino da cintura tirava
+    // os pinos dos tornozelos sem aviso visível). Ímã não: o tamanho é o do ímã que a pessoa comprou.
+    if (settings.size !== null && !isMagnet && size / 2 + margin * 0.75 > widest && largest >= 1.5 && largest < size) {
+      plan.warnings.push(`O encaixe de ${size} mm não cabe neste corte: reduzido para ${largest} mm.`);
+      size = largest;
+    }
+    if (isMagnet && settings.size !== null && size / 2 + margin * 0.75 > widest) {
+      plan.warnings.push(
+        `O ímã de Ø${size} mm escolhido não cabe neste corte com parede de ${margin} mm: deixe o diâmetro em automático (usa o maior ímã que cabe) ou use pino.`,
+      );
+      return plan;
+    }
     if (size < 1.5) {
       plan.warnings.push("Seção do corte fina demais para um encaixe: nenhum pino foi criado.");
       return plan;

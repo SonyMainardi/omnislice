@@ -317,7 +317,20 @@ export async function refreshInterfaces() {
     parts: d.parts.map((p) => ({ id: p.id, geometry: p.geometry })),
     cuts: d.cuts,
   });
-  patchDoc((cur) => (cur.parts === d.parts ? { ...cur, interfaces: ifaces } : cur));
+  patchDoc((cur) => {
+    if (cur.parts !== d.parts) return cur;
+    // O ajuste de um corte (tipo, tamanho, posição dos pinos) é guardado pelo id da interface, que
+    // inclui as peças dos dois lados. Quando uma delas é dividida de novo (o corpo vira calça +
+    // tronco), o corte continua o mesmo: o ajuste acompanha o corte em vez de se perder.
+    const overrides = { ...cur.connectors.overrides };
+    const live = new Set(ifaces.map((i) => i.id));
+    for (const iface of ifaces) {
+      if (overrides[iface.id]) continue;
+      const old = Object.keys(overrides).find((k) => !live.has(k) && Number(k.split(":")[0]) === iface.cutId);
+      if (old) overrides[iface.id] = overrides[old];
+    }
+    return { ...cur, interfaces: ifaces, connectors: { ...cur.connectors, overrides } };
+  });
   invalidateDerived();
 }
 
@@ -836,6 +849,10 @@ export async function buildFinal(): Promise<AppliedConnectorsResult | undefined>
     if (doc() === d) setUi({ final });
     const bad = res.checks.filter((c) => !c.ok);
     if (bad.length) toast("aviso", `${bad.length} encaixe(s) com problema: veja a lista de encaixes.`);
+    // Cortes que pediam encaixe e ficaram sem nenhum (não coube): o usuário precisa saber antes de exportar.
+    const missing = plans.filter((p) => p.kind !== "none" && !p.points.length && d.interfaces.some((i) => i.id === p.interfaceId));
+    if (missing.length)
+      toast("aviso", `${missing.length} corte(s) ficaram sem encaixe (não coube). Veja os avisos na lista de cortes da etapa Encaixes.`, 10000);
     return final;
   });
 }

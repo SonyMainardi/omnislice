@@ -122,6 +122,10 @@ export function ConnectorPanel() {
           autoLength={firstPlan?.length}
         />
         <Hint>
+          Vale para todos os cortes; onde um tamanho escolhido não couber, o encaixe é reduzido só naquele corte. Para mudar um corte só,
+          clique nele na lista abaixo e ative "Configuração própria para este corte".
+        </Hint>
+        <Hint>
           Material: {materialNames[d.connectors.defaults.material]} (mude na etapa Impressão). As folgas automáticas são pontos de
           partida: imprima um teste de encaixe.
         </Hint>
@@ -202,9 +206,11 @@ export function ConnectorPanel() {
           Validar encaixes
         </button>
         {final && (
-          <Hint kind={final.checks.every((c) => c.ok) ? "sucesso" : "aviso"}>
-            {final.checks.filter((c) => c.ok).length} de {final.checks.length} cortes com encaixe validado
+          <Hint kind={final.checks.every((c) => c.ok) && final.checks.length === d.interfaces.length ? "sucesso" : "aviso"}>
+            {final.checks.filter((c) => c.ok).length} de {d.interfaces.length} cortes com encaixe validado
             {final.extras.length ? ` · ${final.extras.length} cavilha(s) avulsa(s)` : ""}.
+            {d.interfaces.length > final.checks.length &&
+              ` ${d.interfaces.length - final.checks.length} corte(s) ficaram sem encaixe: veja os avisos na lista acima.`}
           </Hint>
         )}
       </Section>

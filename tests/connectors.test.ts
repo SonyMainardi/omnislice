@@ -113,6 +113,31 @@ describe("encaixes", () => {
     expect(applied.checks[0].ok).toBe(true);
   });
 
+  it("um tamanho escolhido que não cabe num corte fino é reduzido nesse corte, sem sumir", () => {
+    // O tamanho padrão vale para todos os cortes: 6 mm serve na cintura, mas não num tornozelo de 7 mm.
+    const rod = geometryFromMesh(buildBox(w, [7, 7, 40]));
+    const frame = frameFromNormal([0, 0, 0], [0, 0, 1]);
+    const { front, back } = cutByPlane(w, rod, frame, 1, false);
+    const parts = [
+      { id: "f", geometry: front[0] },
+      { id: "b", geometry: back[0] },
+    ];
+    const [iface] = computeInterfaces(w, parts, [{ id: 1, kind: "plane", frame }]);
+    for (const kind of ["cylinder", "square", "hex"] as const) {
+      const settings = { ...defaultConnectorSettings, kind, size: 6 };
+      const plan = planConnectors(w, { iface, front: front[0], back: back[0], settings });
+      expect(plan.points, kind).toHaveLength(1);
+      expect(plan.size, kind).toBeLessThan(6);
+      expect(plan.warnings.some((m) => m.includes("reduzido para")), kind).toBe(true);
+      const applied = applyConnectors(w, parts, [iface], [plan]);
+      expect(applied.checks[0].ok, kind).toBe(true);
+    }
+    // Onde cabe, o tamanho escolhido é respeitado.
+    const big = run({ kind: "cylinder", size: 6 });
+    expect(big.plan.size).toBe(6);
+    expect(big.plan.warnings.some((m) => m.includes("reduzido"))).toBe(false);
+  });
+
   it("ímã automático: usa o maior ímã comercial que cabe em cortes finos", () => {
     // Haste de 7 × 7 mm: o ímã padrão de 6 mm não cabe com parede de 1,6 mm (antes a face ficava lisa).
     const rod = geometryFromMesh(buildBox(w, [7, 7, 40]));

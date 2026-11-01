@@ -36,6 +36,8 @@ export function ExportPanel() {
   }
   files.push("LEIAME.txt");
   const problems = final?.checks.filter((c) => !c.ok).length ?? 0;
+  // Cortes sem nenhum encaixe aplicado (escolheram "sem encaixe" ou nada coube).
+  const withoutConnector = final ? Math.max(0, d.interfaces.length - final.checks.length) : 0;
 
   return (
     <div className="panel">
@@ -57,6 +59,11 @@ export function ExportPanel() {
         </ul>
       </Section>
       {problems > 0 && <Hint kind="aviso">{problems} encaixe(s) com problema. Revise na etapa Encaixes antes de imprimir.</Hint>}
+      {withoutConnector > 0 && (
+        <Hint kind="aviso">
+          {withoutConnector} corte(s) vão sair sem pino nem furo. Se não foi de propósito, veja os avisos na etapa Encaixes.
+        </Hint>
+      )}
       {!final && <Hint>Gerando as peças finais com encaixes…</Hint>}
       <button
         type="button"

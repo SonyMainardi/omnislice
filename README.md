@@ -44,7 +44,11 @@ um servidor próprio). O teste `e2e` usa o Chromium do cache do Playwright ou o 
      com ela.
 3. **Encaixes**:
    - Tipos: pino cilíndrico, quadrado, sextavado ou em D; cavilha avulsa; alojamento para ímã.
-   - Tamanho e comprimento automáticos (pela seção do corte e pela espessura medida) ou manuais.
+   - Tamanho e comprimento automáticos (pela seção do corte e pela espessura medida) ou manuais. Um
+     tamanho manual que não cabe num corte é reduzido só nele (com aviso); o ímã automático usa o maior
+     ímã comercial que cabe.
+   - Dá para ir e voltar entre Dividir e Encaixes: os encaixes são reaplicados em todos os cortes a cada
+     validação, e o ajuste próprio de um corte continua valendo se uma das peças for dividida de novo.
    - Folga por material (PLA, PETG, ABS, TPU, resina) e ajuste (justo, normal, folgado).
    - Parede mínima até a borda, chanfro e quantidade por corte.
    - Editor 2D da face de corte para arrastar, adicionar e remover pinos.
@@ -108,7 +112,7 @@ Provedores incluídos:
 
 ## Testes
 
-- `npm test` — 52 testes do núcleo:
+- `npm test` — 54 testes do núcleo:
   - análise e reparo;
   - cortes e divisão por regiões (com e sem segmentação automática, de 5 mil a mais de 100 mil triângulos);
   - encaixes, incluindo colisão, parede vazada, cavilha, ímã e conflito entre cortes;
