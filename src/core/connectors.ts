@@ -253,7 +253,41 @@ export function planConnectors(w: Wasm, input: PlanInput): ConnectorPlan {
   }
 }
 
+/** Ímãs de neodímio em disco comuns no mercado (diâmetro × espessura, mm), do padrão ao menor. */
+const MAGNET_SIZES: [number, number][] = [
+  [6, 3],
+  [5, 2],
+  [4, 2],
+  [3, 2],
+  [3, 1],
+  [2, 1],
+];
+
+/**
+ * Com o diâmetro do ímã automático, usa o maior ímã comercial que cabe no corte (seção com parede e
+ * espessura das duas peças). Antes o ímã era sempre de 6 mm e, em cortes finos (um tornozelo, um
+ * pulso), a face ficava lisa sem alojamento nenhum.
+ */
 function planConnectorsRaw(w: Wasm, input: PlanInput): ConnectorPlan {
+  const { settings } = input;
+  if (settings.kind !== "magnet" || settings.size !== null || settings.count <= 0) return planOne(w, input);
+  let last: ConnectorPlan | null = null;
+  for (const [d, t] of MAGNET_SIZES) {
+    const plan = planOne(w, { ...input, settings: { ...settings, size: d, length: settings.length ?? t } });
+    if (plan.points.length) {
+      if (d !== MAGNET_SIZES[0][0]) plan.warnings.push(`Ímã reduzido para Ø${d} × ${plan.length} mm para caber neste corte.`);
+      return plan;
+    }
+    last = plan;
+  }
+  const [dMin, tMin] = MAGNET_SIZES[MAGNET_SIZES.length - 1];
+  last!.warnings = [
+    `Nenhum ímã de Ø${MAGNET_SIZES[0][0]} × ${MAGNET_SIZES[0][1]} mm a Ø${dMin} × ${tMin} mm cabe neste corte com parede de ${settings.edgeMargin} mm: use pino ou cavilha, ou diminua a parede mínima.`,
+  ];
+  return last!;
+}
+
+function planOne(w: Wasm, input: PlanInput): ConnectorPlan {
   const { iface, settings } = input;
   const plan: ConnectorPlan = {
     interfaceId: iface.id,

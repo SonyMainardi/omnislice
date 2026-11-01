@@ -1169,6 +1169,7 @@ function splitSolid(
         accepted = true;
       };
       let fallback: Attempt | null = null;
+      let fallbackGood = false;
 
       if (!accepted && loops.length > 0 && mode !== "seam") {
         const attempt = planarPeel(island.id, loops);
@@ -1176,8 +1177,15 @@ function splitSolid(
           // Pureza: nada de outra parte do modelo dentro da peça. Completude mais tolerante: um plano
           // sempre desvia um pouco da fronteira pintada e deixa um pequeno toco do outro lado.
           const good = attempt.purity >= purityThreshold && attempt.completeness >= 0.75;
-          if (good || mode === "plane") acceptPlanar(attempt, good);
-          else fallback = attempt;
+          // Mas um plano que deixa um pedaço visível da região na peça vizinha (o calcanhar de um
+          // sapato que entra na barra da calça, por exemplo) não é o corte que o usuário pintou: no
+          // modo automático o contorno pintado é tentado antes, e o plano fica de reserva.
+          const complete = attempt.completeness >= 0.95;
+          if ((good && complete) || mode === "plane") acceptPlanar(attempt, good);
+          else {
+            fallback = attempt;
+            fallbackGood = good;
+          }
         }
       }
 
@@ -1189,13 +1197,16 @@ function splitSolid(
           // com aviso.
           const offMaterial = seam !== null && seam.outside > 0.2;
           const tangled = seam !== null && seam.crossings > 20;
-          // Um plano imperfeito, mas que gera sólidos válidos, é melhor que uma tampa com defeito.
-          if (seam && (seam.crossings > 0 || offMaterial) && fallback && fallback.purity >= 0.6) {
+          // Um plano imperfeito, mas que gera sólidos válidos, é melhor que uma tampa com defeito
+          // grave. Uma tampa que só raspa a superfície em poucos pontos segue a pintura e fica (com
+          // aviso): perder um pedaço da peça pintada é pior.
+          if (seam && (tangled || offMaterial) && fallback && (fallbackGood || fallback.purity >= 0.6)) {
             free(seam.part, seam.rest);
-            acceptPlanar(fallback, false);
+            acceptPlanar(fallback, fallbackGood);
             fallback = null;
-            report.message =
-              "O contorno pintado é irregular demais para uma tampa que siga a pintura; a peça foi separada por um plano. Confira a peça ou ajuste a pintura.";
+            report.message = fallbackGood
+              ? `${report.message ?? ""} O contorno pintado não permitiu uma tampa limpa; a peça foi separada pelo plano. Ajuste a pintura nessa fronteira se precisar da peça inteira.`.trim()
+              : "O contorno pintado é irregular demais para uma tampa que siga a pintura; a peça foi separada por um plano. Confira a peça ou ajuste a pintura.";
           } else if (seam && (offMaterial || tangled)) {
             free(seam.part, seam.rest);
             report.message = offMaterial
@@ -1225,7 +1236,7 @@ function splitSolid(
 
       // Melhor um plano imperfeito (peças válidas, com aviso) do que deixar a região sem separar.
       if (!accepted && fallback) {
-        if (fallback.purity >= 0.6) acceptPlanar(fallback, false);
+        if (fallbackGood || fallback.purity >= 0.6) acceptPlanar(fallback, fallbackGood);
         else free(fallback.part, fallback.rest);
       }
       if (!accepted)

@@ -113,6 +113,42 @@ describe("encaixes", () => {
     expect(applied.checks[0].ok).toBe(true);
   });
 
+  it("ímã automático: usa o maior ímã comercial que cabe em cortes finos", () => {
+    // Haste de 7 × 7 mm: o ímã padrão de 6 mm não cabe com parede de 1,6 mm (antes a face ficava lisa).
+    const rod = geometryFromMesh(buildBox(w, [7, 7, 40]));
+    const frame = frameFromNormal([0, 0, 0], [0, 0, 1]);
+    const { front, back } = cutByPlane(w, rod, frame, 1, false);
+    const parts = [
+      { id: "f", geometry: front[0] },
+      { id: "b", geometry: back[0] },
+    ];
+    const [iface] = computeInterfaces(w, parts, [{ id: 1, kind: "plane", frame }]);
+    const settings = { ...defaultConnectorSettings, kind: "magnet" as const };
+    const plan = planConnectors(w, { iface, front: front[0], back: back[0], settings });
+    expect(plan.points).toHaveLength(1);
+    expect(plan.size).toBeLessThan(6);
+    expect(plan.warnings.some((m) => m.startsWith("Ímã reduzido"))).toBe(true);
+    const applied = applyConnectors(w, parts, [iface], [plan]);
+    expect(applied.checks[0].ok).toBe(true);
+    for (const p of parts) expect(applied.parts.get(p.id)!.cut.some((c) => c === CONNECTOR_TAG)).toBe(true);
+    // Num corte grande, o padrão continua sendo o ímã de 6 × 3 mm.
+    const big = run({ kind: "magnet" });
+    expect([big.plan.size, big.plan.length]).toEqual([6, 3]);
+    // Seção menor que qualquer ímã: sem alojamento, com aviso claro.
+    const pin = geometryFromMesh(buildBox(w, [3, 3, 40]));
+    const cut = cutByPlane(w, pin, frame, 2, false);
+    const pinParts = [
+      { id: "f", geometry: cut.front[0] },
+      { id: "b", geometry: cut.back[0] },
+    ];
+    const [pinIface] = computeInterfaces(w, pinParts, [{ id: 2, kind: "plane", frame }]);
+    if (pinIface) {
+      const none = planConnectors(w, { iface: pinIface, front: cut.front[0], back: cut.back[0], settings });
+      expect(none.points).toHaveLength(0);
+      expect(none.warnings.join(" ")).toMatch(/Nenhum ímã/);
+    }
+  });
+
   it("encurta o pino quando a peça fêmea é fina", () => {
     const box = geometryFromMesh(buildBox(w, [40, 40, 10], false));
     const frame = frameFromNormal([0, 0, 3], [0, 0, 1]);
