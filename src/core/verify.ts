@@ -625,7 +625,9 @@ export function verifyConnectors(w: Wasm, input: ConnectorVerifyInput, over?: Pa
           if (!pin.area || !hole.area) return;
           const off = Math.hypot(pin.center[0] - hole.center[0], pin.center[1] - hole.center[1]);
           const offPlan = Math.hypot(pin.center[0] - pt[0], pin.center[1] - pt[1]);
-          list.add("alinhado", "Pino e cavidade alinhados pela mesma referência", off <= 0.01 && offPlan <= 0.01, `eixo do pino a ${fmt(off)} mm do eixo da cavidade e a ${fmt(offPlan)} mm do ponto planejado`, at);
+          // No rebaixo o "ponto" é o centro do contorno: só a cavidade e o plugue precisam coincidir.
+          const socket = plan.kind === "socket";
+          list.add("alinhado", "Pino e cavidade alinhados pela mesma referência", off <= 0.01 && (socket || offPlan <= 0.01), `eixo do pino a ${fmt(off)} mm do eixo da cavidade e a ${fmt(offPlan)} mm do ponto planejado`, at);
           // O pino não pode ter ponto dentro do material da fêmea, e o encaixe precisa assentar.
           const fBvh = bvhOf(female);
           let inside = 0;
@@ -665,7 +667,7 @@ export function verifyConnectors(w: Wasm, input: ConnectorVerifyInput, over?: Pa
             `parede mais fina ${Number.isFinite(thinnest) ? fmt(thinnest, 2) : "-"} mm (mín. ${fmt(need, 2)})`,
             at,
           );
-          list.add("pino-imprimivel", "Pino com diâmetro e comprimento imprimíveis em FDM", plan.size >= 2 && plan.length >= 2, `${plan.size} mm × ${plan.length} mm (mín. 2 × 2)`, at);
+          if (!socket) list.add("pino-imprimivel", "Pino com diâmetro e comprimento imprimíveis em FDM", plan.size >= 2 && plan.length >= 2, `${plan.size} mm × ${plan.length} mm (mín. 2 × 2)`, at);
           return;
         }
         // Cavilha e ímã: alojamentos nos dois lados, alinhados entre si.

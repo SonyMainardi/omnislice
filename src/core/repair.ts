@@ -1,7 +1,7 @@
 import { boundaryLoops, findDegenerateFaces, findDuplicateFaces } from "./analysis";
 import { buildBVH, findSelfIntersections } from "./bvh";
 import { shellNesting } from "./solids";
-import { type Vec2, type Vec3, frameFromNormal, length, newellNormal, polygonArea2D, toLocal } from "./math";
+import { type Vec2, type Vec3, dot, frameFromNormal, length, newellNormal, polygonArea2D, scale, toLocal } from "./math";
 import {
   type IndexedMesh,
   buildEdgeTable,
@@ -238,22 +238,32 @@ export function capLoop(
   positions: number[],
   triangulate: Triangulator | null,
   strict = false,
+  /** Outras direções de projeção a tentar se a do próprio laço não der um polígono simples. */
+  directions: Vec3[] = [],
 ): { tris: number[]; extraVerts: Vec3[] } | null {
   if (loop.length === 3) return { tris: [loop[0], loop[1], loop[2]], extraVerts: [] };
   const pts: Vec3[] = loop.map((v) => [positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]]);
   const nrm = newellNormal(pts);
   if (triangulate && length(nrm) > 1e-12) {
-    const frame = frameFromNormal(pts[0], nrm);
-    const poly: Vec2[] = pts.map((p) => {
-      const l = toLocal(frame, p);
-      return [l[0], l[1]];
-    });
-    if (strict && !isSimplePolygon(poly)) return null;
-    if (polygonArea2D(poly) > 0) {
-      const local = triangulate(poly);
-      if (local && local.length === (loop.length - 2) * 3) {
-        return { tris: local.map((i) => loop[i]), extraVerts: [] };
+    // A normal de Newell resume o laço inteiro; num contorno ondulado (um relevo sobre uma superfície
+    // curva) uma dobrinha da borda pode se cruzar nessa projeção e não em outra, como a normal da
+    // superfície ao redor. A orientação segue a do laço.
+    for (const d of [nrm, ...directions]) {
+      if (!(length(d) > 1e-12)) continue;
+      const dir = dot(d, nrm) < 0 ? scale(d, -1) : d;
+      const frame = frameFromNormal(pts[0], dir);
+      const poly: Vec2[] = pts.map((p) => {
+        const l = toLocal(frame, p);
+        return [l[0], l[1]];
+      });
+      if (strict && !isSimplePolygon(poly)) continue;
+      if (polygonArea2D(poly) > 0) {
+        const local = triangulate(poly);
+        if (local && local.length === (loop.length - 2) * 3) {
+          return { tris: local.map((i) => loop[i]), extraVerts: [] };
+        }
       }
+      if (!strict) break;
     }
   }
   if (strict) return null;

@@ -90,7 +90,7 @@ export interface Ops {
     result: SegmentationResult;
   };
   splitRegions: {
-    args: { geometry: PartGeometry; labels: Uint16Array; separate: number[]; baseLabel: number; mode: SplitMode; firstCutId: number };
+    args: { geometry: PartGeometry; labels: Uint16Array; separate: number[]; baseLabel: number; mode: SplitMode; firstCutId: number; precise: boolean };
     result: { parts: SplitPartResult[]; cuts: CutRecord[]; islands: IslandReport[]; nextCutId: number };
   };
   cutPlane: {

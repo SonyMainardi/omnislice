@@ -14,6 +14,7 @@ import { SectionEditor } from "./SectionEditor";
 
 function SettingsEditor({ value, onChange, autoSize, autoLength }: { value: ConnectorSettings; onChange: (p: Partial<ConnectorSettings>) => void; autoSize?: number; autoLength?: number }) {
   const isMagnet = value.kind === "magnet";
+  const isSocket = value.kind === "socket";
   return (
     <>
       <Field label="Tipo">
@@ -25,17 +26,29 @@ function SettingsEditor({ value, onChange, autoSize, autoLength }: { value: Conn
           ))}
         </select>
       </Field>
+      {isSocket && (
+        <Hint>
+          A peça menor ganha um plugue com o formato do corte e a maior um rebaixo igual, com folga. Bom para peças pequenas (olhos,
+          botões, detalhes) onde um pino não cabe. Com pino, isso já acontece sozinho nos cortes em que o pino não cabe.
+        </Hint>
+      )}
       {value.kind !== "none" && (
         <>
-          <Field label={isMagnet ? "Diâmetro do ímã" : value.kind === "square" ? "Largura" : "Diâmetro"}>
-            <AutoNumber value={value.size} autoValue={autoSize} min={1} max={40} suffix="mm" onChange={(v) => onChange({ size: v })} />
+          {!isSocket && (
+            <Field label={isMagnet ? "Diâmetro do ímã" : value.kind === "square" ? "Largura" : "Diâmetro"}>
+              <AutoNumber value={value.size} autoValue={autoSize} min={1} max={40} suffix="mm" onChange={(v) => onChange({ size: v })} />
+            </Field>
+          )}
+          <Field
+            label={isMagnet ? "Espessura do ímã" : value.kind === "dowel" ? "Comprimento da cavilha" : isSocket ? "Profundidade do rebaixo" : "Comprimento do pino"}
+          >
+            <AutoNumber value={value.length} autoValue={autoLength} min={isSocket ? 0.5 : 1} max={60} suffix="mm" onChange={(v) => onChange({ length: v })} />
           </Field>
-          <Field label={isMagnet ? "Espessura do ímã" : value.kind === "dowel" ? "Comprimento da cavilha" : "Comprimento do pino"}>
-            <AutoNumber value={value.length} autoValue={autoLength} min={1} max={60} suffix="mm" onChange={(v) => onChange({ length: v })} />
-          </Field>
-          <Field label="Quantidade por corte">
-            <Slider value={value.count} min={1} max={8} onChange={(v) => onChange({ count: v })} />
-          </Field>
+          {!isSocket && (
+            <Field label="Quantidade por corte">
+              <Slider value={value.count} min={1} max={8} onChange={(v) => onChange({ count: v })} />
+            </Field>
+          )}
           <Field label="Ajuste" hint="Justo: encaixe sob pressão. Folgado: para colar.">
             <Segmented
               value={value.fit}
@@ -58,12 +71,12 @@ function SettingsEditor({ value, onChange, autoSize, autoLength }: { value: Conn
             />
           </Field>
           {!isMagnet && value.kind !== "dowel" && (
-            <Field label="Pino fica em">
+            <Field label={isSocket ? "Plugue fica em" : "Pino fica em"}>
               <Segmented
                 value={value.maleSide}
                 onChange={(v) => onChange({ maleSide: v })}
                 options={[
-                  { value: "auto", label: "Auto", hint: "Furo na peça com mais material" },
+                  { value: "auto", label: "Auto", hint: isSocket ? "Plugue na peça menor, rebaixo na maior" : "Furo na peça com mais material" },
                   { value: "front", label: "Frente" },
                   { value: "back", label: "Verso" },
                 ]}
@@ -73,7 +86,7 @@ function SettingsEditor({ value, onChange, autoSize, autoLength }: { value: Conn
           <Field label="Parede mínima ao redor" hint="Evita encaixes perto das bordas">
             <Slider value={value.edgeMargin} min={0.8} max={5} step={0.1} format={(v) => `${fmt(v)} mm`} onChange={(v) => onChange({ edgeMargin: v })} />
           </Field>
-          {value.kind !== "magnet" && <Toggle label="Chanfro na ponta" checked={value.chamfer} onChange={(v) => onChange({ chamfer: v })} />}
+          {!isMagnet && !isSocket && <Toggle label="Chanfro na ponta" checked={value.chamfer} onChange={(v) => onChange({ chamfer: v })} />}
         </>
       )}
     </>
@@ -150,7 +163,10 @@ export function ConnectorPanel() {
                 </div>
                 <small>
                   {fmt(iface.area, 0)} mm² · {iface.kind === "plane" ? "plano" : "contorno"}
-                  {plan && plan.points.length > 0 && ` · ${plan.points.length}× Ø${plan.size} × ${plan.length} mm`}
+                  {plan && plan.points.length > 0 &&
+                    (plan.kind === "socket"
+                      ? ` · rebaixo no formato do corte, ${plan.length} mm`
+                      : ` · ${plan.points.length}× Ø${plan.size} × ${plan.length} mm`)}
                   {plan && plan.points.length === 0 && " · sem encaixe"}
                   {d.connectors.overrides[iface.id]?.settings && " · ajuste próprio"}
                 </small>

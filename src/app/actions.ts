@@ -568,7 +568,8 @@ export async function applyRegionSplit(mode: SplitMode) {
   await run("Dividindo em peças", async (progress) => {
     const res = await geometry.call(
       "splitRegions",
-      { geometry: part.geometry, labels: s.labels, separate: effective, baseLabel: s.baseId, mode, firstCutId: d.nextCutId },
+      // Pintura à mão: a fronteira pintada vale; segmentação automática: o plano de junção vale.
+      { geometry: part.geometry, labels: s.labels, separate: effective, baseLabel: s.baseId, mode, firstCutId: d.nextCutId, precise: s.source === "manual" },
       (f, l) => progress(f, l),
     );
     const regionOf = new Map(s.regions.map((r) => [r.id, r]));
@@ -988,7 +989,9 @@ function readme(d: Doc, final: AppliedConnectorsResult, plans: ConnectorPlan[]):
     const a = byId.get(iface.front)?.name ?? "?";
     const b = byId.get(iface.back)?.name ?? "?";
     lines.push(
-      `- ${a} ↔ ${b}: ${plan.points.length} × ${connectorKindNames[plan.kind]} ${plan.size} mm, comprimento ${plan.length} mm, folga ${plan.clearance} mm`,
+      plan.kind === "socket"
+        ? `- ${a} ↔ ${b}: ${connectorKindNames[plan.kind]} (plugue na peça ${plan.maleSide === "front" ? a : b}), profundidade ${plan.length} mm, folga ${plan.clearance} mm`
+        : `- ${a} ↔ ${b}: ${plan.points.length} × ${connectorKindNames[plan.kind]} ${plan.size} mm, comprimento ${plan.length} mm, folga ${plan.clearance} mm`,
     );
   }
   lines.push(

@@ -4,7 +4,7 @@ import { type Mat4, type PlaneFrame, type Vec2, type Vec3, clamp, frameToWorldMa
 import { type PartGeometry, cutTag } from "./part";
 import type { Interface, PartRef } from "./split";
 
-export type ConnectorKind = "none" | "cylinder" | "square" | "hex" | "dshape" | "dowel" | "magnet";
+export type ConnectorKind = "none" | "cylinder" | "square" | "hex" | "dshape" | "socket" | "dowel" | "magnet";
 export type MaterialKind = "pla" | "petg" | "abs" | "tpu" | "resina";
 export type FitKind = "justo" | "normal" | "folgado";
 export type MaleSide = "front" | "back";
@@ -15,6 +15,7 @@ export const connectorKindNames: Record<ConnectorKind, string> = {
   square: "Pino quadrado",
   hex: "Pino sextavado",
   dshape: "Pino em D (não gira)",
+  socket: "Rebaixo no formato do corte",
   dowel: "Pino avulso (cavilha)",
   magnet: "Alojamento para ímã",
 };
@@ -93,7 +94,14 @@ export interface ConnectorPlan {
   chamfer: boolean;
   deviation: number;
   warnings: string[];
+  /** Rebaixo: contorno do plugue (polígonos no plano do corte, relativos a `points[0]`). */
+  profile?: Vec2[][];
+  /** Rebaixo: quanto a raiz do plugue entra na peça menor (mm). */
+  root?: number;
 }
+
+/** Pinos fixos: quando nenhum cabe, o corte recebe um rebaixo no formato da seção. */
+const FIXED_PINS: ConnectorKind[] = ["cylinder", "square", "hex", "dshape"];
 
 function regionFromPolygons(w: Wasm, polygons: Vec2[][]): CrossSection {
   return new w.CrossSection(polygons, "Positive");
@@ -219,6 +227,21 @@ export interface PlanInput {
  * invadiria uma terceira peça).
  */
 export function planConnectors(w: Wasm, input: PlanInput): ConnectorPlan {
+  const plan = planChecked(w, input);
+  // Corte pequeno demais para pino (um olho, um botão, uma orelha): em vez de ficar sem encaixe, a
+  // peça menor encaixa num rebaixo com o formato do corte aberto na maior.
+  if (!plan.points.length && FIXED_PINS.includes(input.settings.kind) && input.settings.count > 0 && !input.manualPoints?.length) {
+    const socket = planChecked(w, { ...input, settings: { ...input.settings, kind: "socket", size: null, length: null } });
+    if (socket.points.length) {
+      socket.warnings.unshift("O pino não cabe neste corte: a peça menor encaixa num rebaixo com o formato do corte, aberto na peça maior.");
+      return socket;
+    }
+    plan.warnings.push(...socket.warnings);
+  }
+  return plan;
+}
+
+function planChecked(w: Wasm, input: PlanInput): ConnectorPlan {
   const plan = planConnectorsRaw(w, input);
   if (!plan.points.length) return plan;
   const reg = new RunRegistry(w);
@@ -243,7 +266,8 @@ export function planConnectors(w: Wasm, input: PlanInput): ConnectorPlan {
       if (escaping <= Math.max(total * 0.02, 0.05)) keep.push(p);
     }
     const dropped = plan.points.length - keep.length;
-    if (dropped && !input.manualPoints?.length)
+    if (dropped && plan.kind === "socket") plan.warnings.push("O rebaixo atravessaria a parede da peça maior: encaixe omitido.");
+    else if (dropped && !input.manualPoints?.length)
       plan.warnings.push(`${dropped} encaixe(s) removido(s): atravessariam a parede ou outra peça.`);
     else if (dropped) plan.warnings.push(`${dropped} encaixe(s) posicionado(s) à mão saem das peças e foram ignorados.`);
     plan.points = keep;
@@ -270,6 +294,7 @@ const MAGNET_SIZES: [number, number][] = [
  */
 function planConnectorsRaw(w: Wasm, input: PlanInput): ConnectorPlan {
   const { settings } = input;
+  if (settings.kind === "socket") return planSocket(w, input);
   if (settings.kind !== "magnet" || settings.size !== null || settings.count <= 0) return planOne(w, input);
   let last: ConnectorPlan | null = null;
   for (const [d, t] of MAGNET_SIZES) {
@@ -440,6 +465,108 @@ function planOne(w: Wasm, input: PlanInput): ConnectorPlan {
   }
 }
 
+/** Centróide (por área) de polígonos com furos (contornos externos anti-horários, furos horários). */
+function polygonsCentroid(polys: Vec2[][]): Vec2 {
+  let a = 0;
+  let cx = 0;
+  let cy = 0;
+  for (const poly of polys)
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const cr = poly[j][0] * poly[i][1] - poly[i][0] * poly[j][1];
+      a += cr;
+      cx += (poly[j][0] + poly[i][0]) * cr;
+      cy += (poly[j][1] + poly[i][1]) * cr;
+    }
+  if (Math.abs(a) < 1e-12) return polys[0]?.[0] ?? [0, 0];
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
+/**
+ * Rebaixo no formato do corte: a peça menor ganha um plugue com o contorno da seção, recuado da
+ * borda, e a maior um rebaixo do mesmo formato com folga. Serve para cortes pequenos demais para
+ * pino (um olho, um botão, uma orelha): o encaixe fica escondido sob a peça menor, não gira e
+ * posiciona a peça exatamente onde ela estava.
+ */
+function planSocket(w: Wasm, input: PlanInput): ConnectorPlan {
+  const { iface, settings } = input;
+  const plan: ConnectorPlan = {
+    interfaceId: iface.id,
+    kind: "socket",
+    frame: iface.frame,
+    points: [],
+    size: 0,
+    length: 0,
+    clearance: 0,
+    maleSide: "front",
+    chamfer: false,
+    deviation: iface.deviation,
+    warnings: [],
+  };
+  if (settings.count <= 0) return plan;
+  const reg = new RunRegistry(w);
+  const arena = new Arena();
+  try {
+    const region = arena.track(regionFromPolygons(w, iface.polygons));
+    if (region.isEmpty()) return plan;
+    const inner = inradius(region);
+    const clearance = settings.clearance ?? autoClearance(settings, 2 * inner);
+    // Recuo do plugue em relação à borda do corte: a folga mais uma parede da peça maior em volta do
+    // rebaixo (a borda do corte continua inteira e a emenda fica onde sempre esteve).
+    const wall = clamp(inner * 0.25, 0.2, settings.edgeMargin);
+    const plug = arena.track(region.offset(-(clearance + wall), "Round"));
+    const plugR = plug.isEmpty() ? 0 : inradius(plug);
+    if (plugR < 0.3) {
+      plan.warnings.push("Corte pequeno demais até para um rebaixo: nenhum encaixe foi criado.");
+      return plan;
+    }
+    const polys = plug.toPolygons() as Vec2[][];
+    const c = polygonsCentroid(polys);
+    const verts = polys.flat();
+    // Profundidade do material dos dois lados, no centro e ao longo do contorno do plugue.
+    const stride = Math.max(1, Math.floor(verts.length / 24));
+    const probes: Vec2[] = [c];
+    for (let i = 0; i < verts.length; i += stride) probes.push(verts[i]);
+    const front = arena.track(reg.fromGeometry(input.front));
+    const back = arena.track(reg.fromGeometry(input.back));
+    const n = iface.frame.normal;
+    const neg: Vec3 = [-n[0], -n[1], -n[2]];
+    const probe = (solid: Manifold, dir: Vec3) =>
+      Math.min(...probes.map((p) => depthAlong(solid, toWorld(iface.frame, p[0], p[1], 0), dir, 500)));
+    const depthFront = probe(front, n);
+    const depthBack = probe(back, neg);
+    // O plugue sai da peça menor; o rebaixo vai na maior (a não ser que a pessoa escolha o lado).
+    const male: MaleSide =
+      settings.maleSide !== "auto" ? settings.maleSide : Math.abs(front.volume()) <= Math.abs(back.volume()) ? "front" : "back";
+    const femaleDepth = male === "front" ? depthBack : depthFront;
+    const maleDepth = male === "front" ? depthFront : depthBack;
+    const wanted = settings.length ?? clamp(Math.round(plugR * 2 * 1.5 * 2) / 2, 1, 6);
+    const length = Math.min(wanted, femaleDepth - FLOOR - DEPTH_GAP);
+    if (length < 0.8) {
+      plan.warnings.push("A peça maior é fina demais atrás deste corte para um rebaixo: encaixe omitido.");
+      return plan;
+    }
+    // A raiz do plugue fica dentro da peça menor (no máximo metade da espessura dela, para não
+    // aparecer do outro lado de um relevo fino). Numa tampa curva, onde a tampa fica acima da raiz
+    // sobra só um vão dentro do rebaixo; o plugue continua preso onde ela desce.
+    const root = Math.min(0.8 + iface.deviation, maleDepth * 0.5);
+    if (root < 0.03) {
+      plan.warnings.push("A peça menor é fina demais para prender um plugue: encaixe omitido.");
+      return plan;
+    }
+    plan.points = [c];
+    plan.profile = polys.map((poly) => poly.map(([x, y]) => [x - c[0], y - c[1]] as Vec2));
+    plan.size = Math.round(2 * Math.max(...verts.map(([x, y]) => Math.hypot(x - c[0], y - c[1]))) * 10) / 10;
+    plan.length = Math.round(length * 10) / 10;
+    plan.clearance = clearance;
+    plan.maleSide = male;
+    plan.root = Math.round(root * 100) / 100;
+    if (length < wanted) plan.warnings.push(`Rebaixo raso (${plan.length} mm) para não furar a peça maior.`);
+    return plan;
+  } finally {
+    arena.dispose();
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Geometria dos encaixes
 // ---------------------------------------------------------------------------------------------
@@ -513,16 +640,38 @@ export function buildConnectorSolids(w: Wasm, reg: RunRegistry, iface: Interface
   if (plan.kind === "none" || !plan.points.length) return;
   const arena = new Arena();
   try {
-    const base = arena.track(profile(w, plan.kind, plan.size));
-    const hole = arena.track(base.offset(plan.clearance, "Round"));
     const dev = plan.deviation;
     const top = 0.5 + dev;
-    const chamfer = plan.chamfer ? Math.min(0.6, plan.size * 0.15) : 0;
     const pushTo = (map: Map<string, Manifold[]>, id: string, m: Manifold) => {
       const list = map.get(id);
       if (list) list.push(m);
       else map.set(id, [m]);
     };
+    if (plan.kind === "socket") {
+      if (!plan.profile) return;
+      // Plugue com o contorno do corte (raiz embutida na peça menor) e rebaixo com a folga em volta.
+      const plug = arena.track(regionFromPolygons(w, plan.profile));
+      const gap = arena.track(plug.offset(plan.clearance, "Round"));
+      const L = plan.length;
+      const root = plan.root ?? 0.5;
+      // Acima do corte o rebaixo só precisa limpar o desvio da tampa: não passa da espessura da peça
+      // menor (a raiz é no máximo metade dela), senão sairia por cima de um relevo fino.
+      const reach = Math.min(top, 1.8 * root);
+      const male = arena.track(w.Manifold.extrude(plug, L + root));
+      const pocket = arena.track(w.Manifold.extrude(gap, L + DEPTH_GAP + reach));
+      const p = plan.points[0];
+      if (plan.maleSide === "front") {
+        pushTo(into.add, iface.front, reg.connector(male.transform(placement(iface.frame, p, -L, false))));
+        pushTo(into.subtract, iface.back, reg.connector(pocket.transform(placement(iface.frame, p, -(L + DEPTH_GAP), false))));
+      } else {
+        pushTo(into.add, iface.back, reg.connector(male.transform(placement(iface.frame, p, L, true))));
+        pushTo(into.subtract, iface.front, reg.connector(pocket.transform(placement(iface.frame, p, L + DEPTH_GAP, true))));
+      }
+      return;
+    }
+    const base = arena.track(profile(w, plan.kind, plan.size));
+    const hole = arena.track(base.offset(plan.clearance, "Round"));
+    const chamfer = plan.chamfer ? Math.min(0.6, plan.size * 0.15) : 0;
     plan.points.forEach((p, i) => {
       if (plan.kind === "dowel" && plan.dowelDepths) {
         const [hf, hb] = plan.dowelDepths;

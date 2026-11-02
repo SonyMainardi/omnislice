@@ -35,18 +35,27 @@ um servidor próprio). O teste `e2e` usa o Chromium do cache do Playwright ou o 
    - *Corte por plano*: plano com alças de mover/girar e prévia ao vivo (frente azul, verso laranja).
      Só as cascas que o plano atravessa são cortadas; as outras vão inteiras para o lado delas.
    - "Gerar peças" corta cada junção por um plano ajustado ao contorno, ou segue o contorno pintado
-     quando o plano atravessaria outra parte. As faces de corte são fechadas e cada peça é validada
-     como sólido estanque.
+     quando o plano atravessaria outra parte. Com pintura feita à mão, o plano só é usado se reproduzir
+     a fronteira pintada; se ele deixaria um pedaço da região na peça vizinha (o peito do pé na barra
+     da calça) ou levaria material de fora junto (a pele em volta de uma tatuagem em relevo), o corte
+     segue o contorno. Na divisão automática a fronteira é aproximada e o plano de junção continua
+     preferido. As faces de corte são fechadas e cada peça é validada como sólido estanque.
+   - Detalhes pequenos pintados de propósito (um olho, um botão) viram peça mesmo quando são menores
+     que o limite usado para limpar respingos de pincel.
    - Arquivos com várias cascas (3MF multipartes, acessórios e detalhes modelados à parte, vários
      objetos no projeto): uma casca pintada inteira vira peça sem nenhuma booleana, e só as cascas
      com mais de uma região pintada são cortadas, cada uma sozinha. Acessórios soltos sem pintura
      cravados numa única região separada (o logotipo de um chapéu, uma espada na mão) vão junto
      com ela.
 3. **Encaixes**:
-   - Tipos: pino cilíndrico, quadrado, sextavado ou em D; cavilha avulsa; alojamento para ímã.
+   - Tipos: pino cilíndrico, quadrado, sextavado ou em D; rebaixo no formato do corte; cavilha avulsa;
+     alojamento para ímã.
    - Tamanho e comprimento automáticos (pela seção do corte e pela espessura medida) ou manuais. Um
      tamanho manual que não cabe num corte é reduzido só nele (com aviso); o ímã automático usa o maior
      ímã comercial que cabe.
+   - Rebaixo: a peça menor ganha um plugue com o formato do corte (recuado da borda) e a maior um
+     rebaixo igual, com folga. Nos cortes pequenos demais para pino (olhos, botões, detalhes), o pino
+     vira rebaixo sozinho em vez de o corte ficar sem encaixe.
    - Dá para ir e voltar entre Dividir e Encaixes: os encaixes são reaplicados em todos os cortes a cada
      validação, e o ajuste próprio de um corte continua valendo se uma das peças for dividida de novo.
    - Folga por material (PLA, PETG, ABS, TPU, resina) e ajuste (justo, normal, folgado).
@@ -112,10 +121,12 @@ Provedores incluídos:
 
 ## Testes
 
-- `npm test` — 54 testes do núcleo:
+- `npm test` — 58 testes do núcleo:
   - análise e reparo;
   - cortes e divisão por regiões (com e sem segmentação automática, de 5 mil a mais de 100 mil triângulos);
-  - encaixes, incluindo colisão, parede vazada, cavilha, ímã e conflito entre cortes;
+  - encaixes, incluindo colisão, parede vazada, cavilha, ímã, rebaixo e conflito entre cortes;
+  - pintura à mão: relevo numa superfície curva sem levar a pele, plano que deixaria um pedaço da
+    região do outro lado, detalhe pequeno que vira peça e encaixa num rebaixo;
   - STL, OBJ e 3MF de ida e volta, inclusive 3MF pintado com componentes;
   - mesa, inclusive a orientação escolhida à mão;
   - qualidade das peças (sem lascas, base cortada no topo plano);
@@ -136,9 +147,11 @@ Provedores incluídos:
 - Malhas que não são sólidos fechados precisam passar pelo reparo (ou pela reconstrução por voxels)
   antes de dividir. Buracos maiores que ~2 células de voxel impedem a reconstrução.
 - Cortes por contorno (não planos) geram tampas que acompanham a pintura: são válidas, mas menos
-  bonitas que cortes planos e podem deixar o pino inclinado. Quando a fronteira pintada é irregular
-  demais (a tampa atravessaria a superfície ou fecharia um vão por fora), o corte usa um plano ou a
-  região não é separada, com uma mensagem explicando como ajustar a pintura.
+  bonitas que cortes planos e podem deixar o pino inclinado. Uma borda pintada colada no pé de uma
+  parede (um relevo) pode fazer a tampa raspar nela em triângulos microscópicos, o que é tolerado.
+  Quando a fronteira pintada é irregular demais (uma parte relevante da tampa sairia do material ou
+  se dobraria), o corte usa um plano ou a região não é separada, com uma mensagem explicando como
+  ajustar a pintura.
 - Cascas que se cruzam no arquivo continuam se cruzando depois da divisão (o OmniSlice não recorta
   uma peça para abrir espaço para a outra).
 - A massa é uma estimativa simples (paredes de 1,2 mm + preenchimento); use o fatiador para o valor real.

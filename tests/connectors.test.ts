@@ -174,6 +174,47 @@ describe("encaixes", () => {
     }
   });
 
+  it("peça pequena demais para pino encaixa num rebaixo com o formato do corte", () => {
+    // Um "olho" (botão de Ø2,4 mm) sobre uma caixa: nenhum pino cabe com parede, então a peça
+    // pequena ganha um plugue com o contorno do corte e a caixa um rebaixo do mesmo formato.
+    const box = w.Manifold.cube([20, 20, 10], true);
+    const eye = w.Manifold.cylinder(1.6, 1.2, 1.2, 48).translate([0, 0, 4.6]);
+    const solid = w.Manifold.union([box, eye]);
+    const mm = solid.getMesh();
+    for (const m of [box, eye, solid]) m.delete();
+    const g = geometryFromMesh({ positions: new Float32Array(mm.vertProperties), indices: new Uint32Array(mm.triVerts) });
+    const frame = frameFromNormal([0, 0, 5.4], [0, 0, 1]);
+    const { front, back } = cutByPlane(w, g, frame, 1, false);
+    const parts = [
+      { id: "olho", geometry: front[0] },
+      { id: "cabeca", geometry: back[0] },
+    ];
+    const [iface] = computeInterfaces(w, parts, [{ id: 1, kind: "plane", frame }]);
+    const plan = planConnectors(w, { iface, front: front[0], back: back[0], settings: defaultConnectorSettings });
+    expect(plan.kind, JSON.stringify(plan.warnings)).toBe("socket");
+    expect(plan.points).toHaveLength(1);
+    expect(plan.maleSide).toBe("front");
+    expect(plan.warnings.join(" ")).toMatch(/rebaixo/);
+    // O plugue fica dentro do contorno do corte, com folga e parede até a borda.
+    for (const poly of plan.profile!) for (const [x, y] of poly) expect(Math.hypot(x + plan.points[0][0], y + plan.points[0][1])).toBeLessThan(1.2 - plan.clearance - 0.15);
+    const applied = applyConnectors(w, parts, [iface], [plan]);
+    expect(applied.checks[0]).toMatchObject({ ok: true });
+    const eyeBefore = signedVolume(front[0].mesh);
+    const eyeAfter = signedVolume(applied.parts.get("olho")!.mesh);
+    const headBefore = signedVolume(back[0].mesh);
+    const headAfter = signedVolume(applied.parts.get("cabeca")!.mesh);
+    expect(eyeAfter).toBeGreaterThan(eyeBefore);
+    expect(headAfter).toBeLessThan(headBefore);
+    // A peça pequena não muda por fora: o topo do olho continua a 1,2 mm do corte.
+    const top = Math.max(...Array.from({ length: applied.parts.get("olho")!.mesh.positions.length / 3 }, (_, i) => applied.parts.get("olho")!.mesh.positions[i * 3 + 2]));
+    expect(top).toBeCloseTo(6.2, 3);
+    for (const p of applied.parts.values()) expect(analyzeMesh(p.mesh).watertight).toBe(true);
+    // Escolhido à mão, o rebaixo também vale para cortes grandes.
+    const big = run({ kind: "socket" });
+    expect(big.plan.points).toHaveLength(1);
+    expect(big.applied.checks[0].ok).toBe(true);
+  });
+
   it("encurta o pino quando a peça fêmea é fina", () => {
     const box = geometryFromMesh(buildBox(w, [40, 40, 10], false));
     const frame = frameFromNormal([0, 0, 3], [0, 0, 1]);

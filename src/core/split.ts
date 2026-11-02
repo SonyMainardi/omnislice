@@ -7,8 +7,10 @@ import {
   centroidOfFaces,
   cleanLabels,
   growFaces,
+  isMainIsland,
   islandLoops,
   labelIslands,
+  largestByLabel,
   sideOfLoop,
 } from "./labels";
 import { Arena, GeometryError, RunRegistry, type Wasm, halfSpaceSize } from "./manifoldBridge";
@@ -336,6 +338,12 @@ export interface RegionSplitInput {
   purityThreshold?: number;
   /** Limpa ilhas minúsculas e serrilhados da pintura antes de cortar. */
   cleanup?: boolean;
+  /**
+   * Pintura feita à mão (pincel, lupa): a fronteira pintada é a que a pessoa quer. Um plano só é
+   * aceito direto se reproduzir essa fronteira; senão o corte segue o contorno. Na segmentação
+   * automática a fronteira é aproximada e o plano de junção continua preferido.
+   */
+  precise?: boolean;
 }
 
 export interface IslandReport {
@@ -468,6 +476,7 @@ export function splitByRegions(w: Wasm, input: RegionSplitInput, triangulate: Tr
         purityThreshold,
         firstCutId: nextCutId,
         minIslandArea: totalArea * 0.0005,
+        precise: input.precise ?? false,
         progress: (f) => onProgress?.((doneWork + f * faces.length) / Math.max(work, 1), label),
       },
       triangulate,
@@ -533,6 +542,8 @@ interface SolidSplitOptions {
   purityThreshold: number;
   /** Área mínima (mm²) para uma ilha virar peça; as menores ficam com a peça vizinha. */
   minIslandArea: number;
+  /** Ver `RegionSplitInput.precise`. */
+  precise: boolean;
   /** Fração (0–1) das ilhas deste sólido já tratadas. */
   progress?: (fraction: number) => void;
 }
@@ -573,8 +584,12 @@ function splitSolid(
   // O que sobra no fim fica com a região da ilha-base (o corpo principal, ou a maior região quando
   // este sólido não tem nada do corpo principal).
   const restLabel = islands[baseIsland].label;
-  // Ilhas desprezíveis (faces degeneradas, pontinhos de pintura) ficam com o corpo principal.
-  const pending = islands.filter((i) => i.id !== baseIsland && i.area >= opts.minIslandArea && i.faces.length >= 3);
+  // Ilhas desprezíveis (faces degeneradas, pontinhos de pintura) ficam com o corpo principal; um
+  // detalhe pequeno pintado de propósito (a ilha principal da região, como um olho) vira peça.
+  const largest = largestByLabel(islands);
+  const pending = islands.filter(
+    (i) => i.id !== baseIsland && i.faces.length >= 3 && (i.area >= opts.minIslandArea || (i.label !== baseLabel && isMainIsland(i, largest))),
+  );
   // Nada a destacar: o sólido segue inteiro, sem passar pelo Manifold.
   if (!pending.length) return { parts: [{ label: restLabel, geometry }], cuts: [], islands: [], nextCutId: opts.firstCutId };
 
@@ -991,6 +1006,35 @@ function splitSolid(
       };
     };
 
+    /**
+     * Quanto o plano se afasta da fronteira pintada, em mm: a maior espessura de região pintada que
+     * ficou do outro lado (`left`, ex.: o peito do pé que entra na barra da calça) e de material de
+     * fora que veio junto com a peça (`taken`). `size` é o raio do maior contorno da ilha.
+     */
+    const planeSpill = (attempt: { part: Manifold; cuts: CutRecord[] }, island: number, loops: BoundaryLoop[]) => {
+      const inPart = new Uint8Array(n);
+      for (const s of reg.toGeometry(attempt.part).src) if (s >= 0) inPart[s] = 1;
+      const planes = attempt.cuts.map((c) => c.frame);
+      const dist = (f: number, p: PlaneFrame) =>
+        (centroids[f * 3] - p.origin[0]) * p.normal[0] + (centroids[f * 3 + 1] - p.origin[1]) * p.normal[1] + (centroids[f * 3 + 2] - p.origin[2]) * p.normal[2];
+      let left = 0;
+      let taken = 0;
+      for (let f = 0; f < n; f++) {
+        const mine = islandOf[f] === island;
+        if (mine && !inPart[f]) {
+          let d = 0;
+          for (const p of planes) d = Math.max(d, -dist(f, p));
+          left = Math.max(left, d);
+        } else if (!mine && inPart[f]) {
+          let d = Infinity;
+          for (const p of planes) d = Math.min(d, dist(f, p));
+          if (Number.isFinite(d)) taken = Math.max(taken, d);
+        }
+      }
+      const size = Math.max(...loops.map((l) => loopFrame(island, l).fit.radius));
+      return { left, taken, size };
+    };
+
     const seamPeel = (island: number) => {
       const R = reg.toGeometry(rest);
       const rm = R.mesh;
@@ -1039,11 +1083,14 @@ function splitSolid(
       const restCapTag: number[] = [];
       const seamCuts: CutRecord[] = [];
       let irregular = false;
-      // Triângulos de tampa que ainda atravessam a superfície (a peça sai com autointerseção).
+      // Triângulos de tampa que ainda atravessam a superfície (a peça sai com autointerseção) e a
+      // maior fração da área de uma tampa fora do material ou dobrada sobre si mesma.
       let crossings = 0;
+      let crossingArea = 0;
       // Maior fração de uma tampa fora do material (tampa fechando um vão pelo lado de fora).
       let outside = 0;
       let solidBVH: MeshBVH | null = null;
+      let rNormals: ReturnType<typeof faceNormalsAndAreas> | null = null;
       let cutId = nextCutId;
       for (const loop of loops) {
         const verts = loop.halfEdges.map((h) => halfEdgeFrom(rm, h));
@@ -1055,23 +1102,30 @@ function splitSolid(
         });
         const fit = fitPlane(pts, verts.length);
         if (fit.maxDeviation > 0.35 * Math.max(fit.radius, 1e-6)) irregular = true;
-        // A tampa da peça percorre a borda no sentido oposto ao das faces da ilha.
-        // Contorno que se cruza quando achatado (ex.: dá a volta num relevo): tampa curva em membrana.
-        // Uma tampa plana num contorno muito ondulado pode atravessar a superfície: também vira membrana.
-        let cap = capLoop(verts.slice().reverse(), positions, triangulate, true);
-        let crossing = cap ? capCrossings(rm, positions, cap.tris, cap.extraVerts) : 0;
-        if (!cap || crossing > 0) {
-          const membrane = membraneCap(verts.slice().reverse(), positions);
-          const membraneCrossing = capCrossings(rm, positions, membrane.tris, membrane.extraVerts);
-          if (!cap || membraneCrossing < crossing) {
-            cap = membrane;
-            crossing = membraneCrossing;
-          }
-          irregular = true;
-        }
-        crossings += crossing;
+        // A tampa da peça percorre a borda no sentido oposto ao das faces da ilha. Ela é plana
+        // (triangulada na projeção do laço); se a projeção se cruzar, tenta a direção da superfície ao
+        // redor (de onde se vê um relevo) e a da própria região.
+        rNormals ??= faceNormalsAndAreas(rm);
         solidBVH ??= buildBVH(rm);
-        outside = Math.max(outside, capOutsideFraction(solidBVH, positions, cap.tris, cap.extraVerts));
+        const bvh = solidBVH;
+        const directions = [averageNormal(rNormals, loop.outerFaces), averageNormal(rNormals, loop.innerFaces), fit.normal];
+        const judge = (c: { tris: number[]; extraVerts: Vec3[] }) => capDefects(rm, bvh, positions, c.tris, c.extraVerts);
+        let cap = capLoop(verts.slice().reverse(), positions, triangulate, true, directions);
+        let defects = cap ? judge(cap) : null;
+        // Contorno que se cruza em toda projeção (ex.: dá a volta num relevo), ou tampa plana que
+        // atravessa a superfície: tenta a tampa curva em membrana e fica com a de menor defeito.
+        if (!cap || !defects || defects.faces > 0) {
+          const membrane = membraneCap(verts.slice().reverse(), positions);
+          const membraneDefects = judge(membrane);
+          if (!cap || !defects || membraneDefects.out + membraneDefects.self < defects.out + defects.self) {
+            cap = membrane;
+            defects = membraneDefects;
+            irregular = true;
+          }
+        }
+        crossings += defects.faces;
+        crossingArea = Math.max(crossingArea, defects.out + defects.self);
+        outside = Math.max(outside, capOutsideFraction(bvh, positions, cap.tris, cap.extraVerts));
         const { tris, extraVerts } = cap;
         for (const v of extraVerts) positions.push(v[0], v[1], v[2]);
         // A frente do corte aponta para dentro da ilha (mesma convenção do corte plano).
@@ -1114,7 +1168,7 @@ function splitSolid(
       const part = arena.track(reg.fromGeometry(build((t) => inSet[t] === 1, partCaps, partCapTag)));
       const restSolid = arena.track(reg.fromGeometry(build((t) => inSet[t] === 0, restCaps, restCapTag)));
       solidBVH?.geometry.dispose();
-      return { part, rest: restSolid, cuts: seamCuts, irregular, crossings, outside };
+      return { part, rest: restSolid, cuts: seamCuts, irregular, crossings, crossingArea, outside };
     };
 
     while (pending.length) {
@@ -1180,7 +1234,15 @@ function splitSolid(
           // Mas um plano que deixa um pedaço visível da região na peça vizinha (o calcanhar de um
           // sapato que entra na barra da calça, por exemplo) não é o corte que o usuário pintou: no
           // modo automático o contorno pintado é tentado antes, e o plano fica de reserva.
-          const complete = attempt.completeness >= 0.95;
+          let complete = attempt.completeness >= 0.95;
+          // Pintura feita à mão marca a fronteira que a pessoa quer: além da área, o plano não pode se
+          // afastar dela (nem deixar o peito do pé na calça, nem levar pele junto com um relevo) mais
+          // que 10% do raio do corte (no mínimo 0,2 mm, abaixo do que uma impressora mostra).
+          if (complete && opts.precise) {
+            const spill = planeSpill(attempt, island.id, loops);
+            const tol = Math.max(0.1 * spill.size, 0.2);
+            complete = spill.left <= tol && spill.taken <= tol;
+          }
           if ((good && complete) || mode === "plane") acceptPlanar(attempt, good);
           else {
             fallback = attempt;
@@ -1192,11 +1254,11 @@ function splitSolid(
       if (!accepted && loops.length > 0 && mode !== "plane") {
         try {
           const seam = seamPeel(island.id);
-          // Tampa no ar (fechando um vão por fora) ou cruzando a superfície em muitos pontos: as
-          // peças se sobrepõem e não servem. Poucos cruzamentos (a tampa raspa num relevo) passam
-          // com aviso.
+          // Tampa no ar (fechando um vão por fora) ou com uma parte relevante da área atravessando a
+          // superfície: as peças se sobrepõem e não servem. Triângulos minúsculos que raspam no pé de
+          // um relevo (a borda pintada em zigue-zague junto de uma parede) não contam.
           const offMaterial = seam !== null && seam.outside > 0.2;
-          const tangled = seam !== null && seam.crossings > 20;
+          const tangled = seam !== null && seam.crossingArea > 0.01;
           // Um plano imperfeito, mas que gera sólidos válidos, é melhor que uma tampa com defeito
           // grave. Uma tampa que só raspa a superfície em poucos pontos segue a pintura e fica (com
           // aviso): perder um pedaço da peça pintada é pior.
@@ -1225,7 +1287,7 @@ function splitSolid(
             report.completeness = 1;
             if (seam.irregular)
               report.message = "O contorno pintado é bem irregular; a tampa do corte pode ficar inclinada.";
-            if (seam.crossings > 0)
+            if (seam.crossingArea > 0.002)
               report.message = `A tampa do corte raspa a superfície do modelo em ${seam.crossings} ponto(s) (contorno pintado irregular). Confira a peça; se precisar, suavize a pintura nessa fronteira ou use o corte por plano.`;
             accepted = true;
           }
@@ -1384,11 +1446,20 @@ function attachDetachedBase(
 }
 
 /**
- * Quantos triângulos de uma tampa atravessam a superfície do sólido ou a própria tampa (contorno
- * muito ondulado). Só as faces perto da tampa entram no teste.
+ * Defeitos de uma tampa: quantos triângulos atravessam a superfície do sólido ou a própria tampa e,
+ * em fração da área da tampa, quanto ficou fora do material (`out`) e quanto está dobrado sobre a
+ * própria tampa (`self`). Um contorno que corre colado no pé de uma parede gera triângulos
+ * minúsculos que raspam nela (área fora desprezível); uma tampa que fura a superfície ou se dobra
+ * tem área relevante fora do lugar. Só as faces perto da tampa entram no teste de cruzamento.
  */
-function capCrossings(rm: IndexedMesh, positions: number[], tris: number[], extraVerts: Vec3[]): number {
-  if (!tris.length) return 0;
+function capDefects(
+  rm: IndexedMesh,
+  solid: MeshBVH,
+  positions: number[],
+  tris: number[],
+  extraVerts: Vec3[],
+): { faces: number; out: number; self: number } {
+  if (!tris.length) return { faces: 0, out: 0, self: 0 };
   const all = new Float32Array(positions.length + extraVerts.length * 3);
   all.set(positions);
   extraVerts.forEach((v, i) => all.set(v, positions.length + i * 3));
@@ -1417,10 +1488,96 @@ function capCrossings(rm: IndexedMesh, positions: number[], tris: number[], extr
   indices.set(tris, near.length * 3);
   const mesh: IndexedMesh = { positions: all, indices };
   const capFaces = Array.from({ length: tris.length / 3 }, (_, i) => near.length + i);
-  const pairs = findSelfIntersections(mesh, 1000, eps, undefined, { faces: capFaces, bvh: buildBVH(mesh) });
-  const faces = new Set<number>();
-  for (const [i] of pairs) faces.add(i);
-  return faces.size;
+  const local = buildBVH(mesh);
+  const pairs = findSelfIntersections(mesh, 1000, eps, undefined, { faces: capFaces, bvh: local });
+  local.geometry.dispose();
+  const crossing = new Set<number>();
+  const folded = new Set<number>();
+  for (const [i, j] of pairs) {
+    if (i >= near.length && j >= near.length) {
+      folded.add(i);
+      folded.add(j);
+    } else crossing.add(i >= near.length ? i : j);
+  }
+  const corner = (f: number, k: number): Vec3 => {
+    const v = indices[f * 3 + k] * 3;
+    return [all[v], all[v + 1], all[v + 2]];
+  };
+  const triArea = (f: number) => {
+    const p = [corner(f, 0), corner(f, 1), corner(f, 2)];
+    return length(cross(sub(p[1], p[0]), sub(p[2], p[0]))) / 2;
+  };
+  let total = 0;
+  for (const f of capFaces) total += triArea(f);
+  if (!(total > 0)) return { faces: crossing.size + folded.size, out: 0, self: 0 };
+  let self = 0;
+  for (const f of folded) self += triArea(f);
+  // Área fora do material nos triângulos que cruzam a superfície: cada um é dividido numa grade de
+  // 16 subtriângulos e o centro de cada um é testado (paridade de raios em três direções).
+  const ray = new Ray();
+  const dirs: Vec3[] = [
+    [0.5773, 0.5774, 0.5775],
+    [-0.6123, 0.2117, 0.7616],
+    [0.1371, -0.8492, 0.5099],
+  ];
+  const insideSolid = (p: Vec3) => {
+    let votes = 0;
+    for (const d of dirs) {
+      ray.origin.set(p[0], p[1], p[2]);
+      ray.direction.set(d[0], d[1], d[2]).normalize();
+      if (solid.raycast(ray, DoubleSide).filter((h) => h.distance > 1e-7).length % 2 === 1) votes++;
+    }
+    return votes >= 2;
+  };
+  const G = 4;
+  let out = 0;
+  for (const f of crossing) {
+    if (folded.has(f)) continue;
+    const [a, b, c] = [corner(f, 0), corner(f, 1), corner(f, 2)];
+    const sub2 = triArea(f) / (G * G);
+    const at = (u: number, v: number): Vec3 => {
+      const w = 1 - u - v;
+      return [a[0] * w + b[0] * u + c[0] * v, a[1] * w + b[1] * u + c[1] * v, a[2] * w + b[2] * u + c[2] * v];
+    };
+    for (let i = 0; i < G; i++)
+      for (let j = 0; j < G - i; j++) {
+        // Subtriângulo "de pé" (i, j) e, quando existe, o "de cabeça para baixo" ao lado.
+        if (!insideSolid(at((i + 1 / 3) / G, (j + 1 / 3) / G))) out += sub2;
+        if (i + j < G - 1 && !insideSolid(at((i + 2 / 3) / G, (j + 2 / 3) / G))) out += sub2;
+      }
+  }
+  // Os demais triângulos não cruzam a superfície: ficam inteiros dentro ou fora do material (uma
+  // tampa que sai pela borda e fecha um vão por fora). Basta o centro de cada um; em tampas muito
+  // grandes, uma amostra sistemática pela área.
+  const rest: number[] = [];
+  let restArea = 0;
+  for (const f of capFaces)
+    if (!crossing.has(f) && !folded.has(f)) {
+      rest.push(f);
+      restArea += triArea(f);
+    }
+  const center = (f: number): Vec3 => {
+    const [a, b, c] = [corner(f, 0), corner(f, 1), corner(f, 2)];
+    return [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
+  };
+  const SAMPLES = 3000;
+  if (rest.length <= SAMPLES) {
+    for (const f of rest) if (!insideSolid(center(f))) out += triArea(f);
+  } else if (restArea > 0) {
+    const step = restArea / SAMPLES;
+    let acc = 0;
+    let next = step / 2;
+    for (const f of rest) {
+      acc += triArea(f);
+      let hits = 0;
+      while (next <= acc) {
+        hits++;
+        next += step;
+      }
+      if (hits && !insideSolid(center(f))) out += hits * step;
+    }
+  }
+  return { faces: crossing.size + folded.size, out: out / total, self: self / total };
 }
 
 /**
@@ -1461,6 +1618,14 @@ function capOutsideFraction(solid: MeshBVH, positions: number[], tris: number[],
     if (votes < 2) outside += areas[i];
   }
   return total > 0 ? outside / total : 0;
+}
+
+/** Normal média (ponderada pela área) de um conjunto de faces. */
+function averageNormal(na: { normals: ArrayLike<number>; areas: ArrayLike<number> }, faces: number[]): Vec3 {
+  const s: Vec3 = [0, 0, 0];
+  for (const f of faces) for (let k = 0; k < 3; k++) s[k] += na.normals[f * 3 + k] * na.areas[f];
+  const l = Math.hypot(s[0], s[1], s[2]);
+  return l > 1e-12 ? scale(s, 1 / l) : [0, 0, 0];
 }
 
 function triangleNormalSum(tris: number[], positions: number[]): Vec3 {

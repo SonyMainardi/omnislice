@@ -699,6 +699,33 @@ export class Viewer {
           view.connectors.add(mesh);
         };
         const r = plan.size / 2;
+        if (plan.kind === "socket" && plan.profile) {
+          // Plugue e rebaixo com o formato do corte, extrudados ao longo da normal.
+          const dir = plan.maleSide === "front" ? -1 : 1;
+          const addShape = (partId: string, color: number, z1: number, opacity: number) => {
+            const view = this.views.get(partId);
+            if (!view) return;
+            const geom = new THREE.ExtrudeGeometry(profileShapes(plan.profile!), { depth: Math.abs(z1), bevelEnabled: false });
+            if (z1 < 0) geom.translate(0, 0, z1);
+            const mesh = new THREE.Mesh(
+              geom,
+              new THREE.MeshStandardMaterial({
+                color,
+                transparent: opacity < 1,
+                opacity: active ? opacity : opacity * 0.35,
+                depthTest: opacity >= 1,
+                roughness: 0.4,
+                side: THREE.DoubleSide,
+              }),
+            );
+            mesh.renderOrder = opacity < 1 ? 5 : 0;
+            mesh.applyMatrix4(basis.clone().setPosition(origin));
+            view.connectors.add(mesh);
+          };
+          addShape(male, 0x36cfa0, dir * plan.length, 1);
+          addShape(female, 0xff5d7a, dir * (plan.length + 0.4), 0.45);
+          continue;
+        }
         if (plan.kind === "dowel" && plan.dowelDepths) {
           add(front, 0xffd166, r, -plan.dowelDepths[1], plan.dowelDepths[0], 1);
         } else if (plan.kind === "magnet") {
@@ -713,4 +740,28 @@ export class Viewer {
     }
     this.invalidate();
   }
+}
+
+/** Contornos de um encaixe (externos anti-horários, furos horários) como formas do three.js. */
+function profileShapes(polys: [number, number][][]): THREE.Shape[] {
+  const area = (p: [number, number][]) => {
+    let a = 0;
+    for (let i = 0, j = p.length - 1; i < p.length; j = i++) a += p[j][0] * p[i][1] - p[i][0] * p[j][1];
+    return a / 2;
+  };
+  const inside = (pt: [number, number], poly: [number, number][]) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
+      if (poly[i][1] > pt[1] !== poly[j][1] > pt[1] && pt[0] < ((poly[j][0] - poly[i][0]) * (pt[1] - poly[i][1])) / (poly[j][1] - poly[i][1]) + poly[i][0]) c = !c;
+    return c;
+  };
+  // O maior contorno é sempre externo: o sinal dele define o sentido dos externos.
+  const sign = Math.sign(polys.reduce((best, p) => (Math.abs(area(p)) > Math.abs(best) ? area(p) : best), 0)) || 1;
+  const outers = polys.filter((p) => area(p) * sign > 0);
+  const shapes = outers.map((p) => new THREE.Shape(p.map(([x, y]) => new THREE.Vector2(x, y))));
+  for (const hole of polys.filter((p) => area(p) * sign < 0)) {
+    const k = outers.findIndex((o) => inside(hole[0], o));
+    if (k >= 0) shapes[k].holes.push(new THREE.Path(hole.map(([x, y]) => new THREE.Vector2(x, y))));
+  }
+  return shapes;
 }

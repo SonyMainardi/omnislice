@@ -77,8 +77,9 @@ function absorbSmallIslands(
     // Absorve das menores para as maiores, uma de cada vez por passada.
     const order = islands.slice().sort((a, b) => a.area - b.area);
     const absorbed = new Uint8Array(islands.length);
+    const largest = largestByLabel(islands);
     for (const isl of order) {
-      if (isl.area >= opts.minIslandArea && isl.faces.length >= opts.minIslandFaces) continue;
+      if (isl.faces.length >= opts.minIslandFaces && (isl.area >= opts.minIslandArea || isMainIsland(isl, largest))) continue;
       const border = new Map<number, number>();
       for (const f of isl.faces)
         for (let k = 0; k < 3; k++) {
@@ -103,6 +104,22 @@ function absorbSmallIslands(
     }
     if (!changed) break;
   }
+}
+
+/** Área da maior ilha de cada rótulo. */
+export function largestByLabel(islands: Island[]): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const isl of islands) out.set(isl.label, Math.max(out.get(isl.label) ?? 0, isl.area));
+  return out;
+}
+
+/**
+ * Ilha que é a pintura principal do rótulo (ou uma das principais, como os dois olhos de uma região
+ * "olhos"), por menor que seja: um detalhe pintado de propósito não é sujeira de pincel. Respingos
+ * minúsculos perto de uma ilha bem maior do mesmo rótulo continuam sendo limpos.
+ */
+export function isMainIsland(isl: Island, largest: Map<number, number>): boolean {
+  return isl.area >= 0.25 * (largest.get(isl.label) ?? 0);
 }
 
 /** Reentrâncias de uma face: a face com dois vizinhos de outro rótulo passa a ser dele. */
