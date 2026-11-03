@@ -35,13 +35,31 @@ um servidor próprio). O teste `e2e` usa o Chromium do cache do Playwright ou o 
    - *Corte por plano*: plano com alças de mover/girar e prévia ao vivo (frente azul, verso laranja).
      Só as cascas que o plano atravessa são cortadas; as outras vão inteiras para o lado delas.
    - "Gerar peças" corta cada junção por um plano ajustado ao contorno, ou segue o contorno pintado
-     quando o plano atravessaria outra parte. Com pintura feita à mão, o plano só é usado se reproduzir
-     a fronteira pintada; se ele deixaria um pedaço da região na peça vizinha (o peito do pé na barra
-     da calça) ou levaria material de fora junto (a pele em volta de uma tatuagem em relevo), o corte
-     segue o contorno. Na divisão automática a fronteira é aproximada e o plano de junção continua
-     preferido. As faces de corte são fechadas e cada peça é validada como sólido estanque.
+     quando o plano atravessaria outra parte. Com pintura feita à mão, o corte nunca sai do que foi
+     pintado: o plano só é usado se reproduzir a fronteira pintada (dentro de um triângulo da malha);
+     se ele deixaria um pedaço da região na peça vizinha (o peito do pé na barra da calça, o funil de
+     uma bota preso na perna) ou levaria material de fora junto (a pele em volta de uma tatuagem em
+     relevo), o corte segue o contorno; e se nem o contorno fecha, a região não é separada e a mensagem
+     diz o que ajustar, em vez de cortar em outro lugar. Na divisão automática a fronteira é aproximada
+     e o plano de junção continua preferido. As faces de corte são fechadas e cada peça é validada
+     como sólido estanque.
+   - Lado de dentro escondido: quem pinta com o pincel cobre o que vê, e o lado de dentro de um cano
+     dobrado em funil, de uma manga ou de uma gola costuma ficar sem tinta. Faces sem pintura presas
+     dentro da região pintada (dentro do volume fechado por ela e pelas tampas dos contornos) vão com
+     ela; o membro que entra pela abertura (a perna dentro do funil) continua na peça vizinha, e o corte
+     fica onde ele encontra o fundo, escondido e perpendicular a ele.
+   - Trechos sem pintura que a pintura deixa soltos do corpo (a bota abaixo de uma canela pintada, as
+     pernas entre a calça e os sapatos) viram peças próprias, com o nome do corpo numerado; furos
+     pequenos na pintura (a íris que o pincel não cobriu dentro do olho) ficam com a região em volta.
+     Na divisão automática esses trechos acompanham a peça vizinha.
+   - Detalhes de superfície pintados (um olho afundado, um emblema, um relevo raso) saem como peça
+     embutida: a superfície pintada vira o topo de uma peça de até 1,5 mm de espessura para dentro do
+     modelo, com o contorno exato da pintura, que assenta num rebaixo do mesmo formato. É o que
+     acontece quando a tampa do contorno ficaria no ar (olho afundado) ou deixaria uma peça fina
+     demais para imprimir; antes um plano pegava só o que sobra acima dele (a íris, e não o olho).
    - Detalhes pequenos pintados de propósito (um olho, um botão) viram peça mesmo quando são menores
-     que o limite usado para limpar respingos de pincel.
+     que o limite usado para limpar respingos de pincel, desde que tenham pelo menos 1 mm² (manchas
+     menores ficam na peça vizinha, com aviso).
    - Arquivos com várias cascas (3MF multipartes, acessórios e detalhes modelados à parte, vários
      objetos no projeto): uma casca pintada inteira vira peça sem nenhuma booleana, e só as cascas
      com mais de uma região pintada são cortadas, cada uma sozinha. Acessórios soltos sem pintura
@@ -56,6 +74,21 @@ um servidor próprio). O teste `e2e` usa o Chromium do cache do Playwright ou o 
    - Rebaixo: a peça menor ganha um plugue com o formato do corte (recuado da borda) e a maior um
      rebaixo igual, com folga. Nos cortes pequenos demais para pino (olhos, botões, detalhes), o pino
      vira rebaixo sozinho em vez de o corte ficar sem encaixe.
+   - Peça embutida (olho, emblema): o encaixe é o próprio rebaixo; na validação ele é alargado pela
+     folga do material e nenhum pino é acrescentado.
+   - Apoio entre peças separadas: peças que já eram cascas separadas no arquivo e se apoiam uma na
+     outra (a figura em pé sobre a base) ganham interfaces de "apoio" onde as faces de uma ficam de
+     frente para uma superfície plana da outra, a até 1 mm (a sola esculpida toca a base num ponto e
+     fica uns décimos acima no resto, ou está um pouco cravada nela). Cada sola recebe seu pino ou
+     plugue, que atravessa essa folga; a sobreposição que já existia no arquivo não conta como colisão
+     na validação. Apoio em superfície curva (chapéu na cabeça) ou entre peças já ligadas por um corte
+     não conta.
+   - Cada região de um corte ganha encaixe (duas pernas cortadas pelo mesmo plano, duas solas na
+     base), com a quantidade escolhida dividida pela área.
+   - Corte por contorno num membro (a perna dentro do cano de uma bota) com a tampa bem inclinada em
+     relação a ele: o pino segue o eixo do membro em vez da tampa, para não sair pela parede. Em seções
+     estreitas (tornozelo, pulso) o pino automático encolhe até caber com 3/4 da parede mínima, em vez
+     de sumir.
    - Dá para ir e voltar entre Dividir e Encaixes: os encaixes são reaplicados em todos os cortes a cada
      validação, e o ajuste próprio de um corte continua valendo se uma das peças for dividida de novo.
    - Folga por material (PLA, PETG, ABS, TPU, resina) e ajuste (justo, normal, folgado).
@@ -121,12 +154,18 @@ Provedores incluídos:
 
 ## Testes
 
-- `npm test` — 58 testes do núcleo:
+- `npm test` — 67 testes do núcleo:
   - análise e reparo;
   - cortes e divisão por regiões (com e sem segmentação automática, de 5 mil a mais de 100 mil triângulos);
   - encaixes, incluindo colisão, parede vazada, cavilha, ímã, rebaixo e conflito entre cortes;
   - pintura à mão: relevo numa superfície curva sem levar a pele, plano que deixaria um pedaço da
-    região do outro lado, detalhe pequeno que vira peça e encaixa num rebaixo;
+    região do outro lado, detalhe pequeno que vira peça e encaixa num rebaixo, bota pintada só por
+    fora (o funil vai inteiro e as duas botas ganham pino), canela pintada (a bota abaixo vira peça
+    própria), olho afundado com íris em relevo (sai inteiro como peça embutida);
+  - apoio entre peças separadas: figura sobre a base (um encaixe por sola, inclusive com a sola um
+    pouco acima da base ou cravada nela), e nada de apoio entre peças distantes, ligadas por corte ou
+    em superfície curva;
+  - encaixe em cada região de um corte (duas pernas no mesmo plano);
   - STL, OBJ e 3MF de ida e volta, inclusive 3MF pintado com componentes;
   - mesa, inclusive a orientação escolhida à mão;
   - qualidade das peças (sem lascas, base cortada no topo plano);
@@ -150,8 +189,11 @@ Provedores incluídos:
   bonitas que cortes planos e podem deixar o pino inclinado. Uma borda pintada colada no pé de uma
   parede (um relevo) pode fazer a tampa raspar nela em triângulos microscópicos, o que é tolerado.
   Quando a fronteira pintada é irregular demais (uma parte relevante da tampa sairia do material ou
-  se dobraria), o corte usa um plano ou a região não é separada, com uma mensagem explicando como
-  ajustar a pintura.
+  se dobraria) e a região não é um detalhe de superfície que possa sair embutido, a região não é
+  separada (com pintura à mão) ou é separada por um plano (na divisão automática), com uma mensagem
+  explicando como ajustar a pintura.
+- A peça embutida tem espessura constante (até 1,5 mm, deixando pelo menos 0,8 mm de material atrás) e
+  a folga do encaixe dela é aproximada pelo deslocamento da superfície (fica perto da folga escolhida).
 - Cascas que se cruzam no arquivo continuam se cruzando depois da divisão (o OmniSlice não recorta
   uma peça para abrir espaço para a outra).
 - A massa é uma estimativa simples (paredes de 1,2 mm + preenchimento); use o fatiador para o valor real.

@@ -8,6 +8,13 @@ import { setManualPoints } from "../actions";
  * Editor 2D da face de corte: mostra a seção (no plano do corte) e os encaixes.
  * Arraste para mover · clique duplo para adicionar · clique direito para remover.
  */
+/** Tipo do corte em linguagem do usuário. */
+export function interfaceKindLabel(iface: Interface): string {
+  if (iface.inlay) return `embutido (${iface.inlay.toFixed(1).replace(".", ",")} mm)`;
+  if (iface.kind === "contact") return `apoio entre peças separadas (folga até ${iface.deviation.toFixed(1).replace(".", ",")} mm)`;
+  return iface.kind === "plane" ? "corte plano" : `contorno (desvio ${iface.deviation.toFixed(1)} mm)`;
+}
+
 export function SectionEditor({ iface, plan, frontColor, backColor }: { iface: Interface; plan?: ConnectorPlan; frontColor: string; backColor: string }) {
   const svg = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<{ index: number; points: Vec2[] } | null>(null);
@@ -107,9 +114,15 @@ export function SectionEditor({ iface, plan, frontColor, backColor }: { iface: I
       </svg>
       <div className="section-legend">
         <span>
-          {iface.area.toFixed(0)} mm² · {iface.kind === "plane" ? "corte plano" : `contorno (desvio ${iface.deviation.toFixed(1)} mm)`}
+          {iface.area.toFixed(0)} mm² · {interfaceKindLabel(iface)}
         </span>
-        <span>{socket ? "Plugue no formato do corte (posição fixa)" : "Arraste os pinos · clique duplo adiciona · botão direito remove"}</span>
+        <span>
+          {plan?.embedded
+            ? "Peça embutida: assenta no próprio rebaixo, sem pino"
+            : socket
+              ? "Plugue no formato do corte (posição fixa)"
+              : "Arraste os pinos · clique duplo adiciona · botão direito remove"}
+        </span>
       </div>
     </div>
   );

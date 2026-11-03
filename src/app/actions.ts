@@ -574,6 +574,10 @@ export async function applyRegionSplit(mode: SplitMode) {
     );
     const regionOf = new Map(s.regions.map((r) => [r.id, r]));
     const used = d.parts.filter((p) => p.id !== part.id).map((p) => p.color);
+    // Trechos sem pintura que a pintura deixou soltos do corpo (a bota abaixo da canela pintada) viram
+    // peças próprias com o nome do corpo numerado, como em "Separar cascas".
+    const baseName = regionOf.get(s.baseId)?.name ?? part.name;
+    const detachedName = new Map(res.detached.map((label, i) => [label, `${baseName} ${i + 2}`]));
     const parts: Part[] = res.parts.map((p) => {
       const region = regionOf.get(p.label);
       const isBase = p.label === s.baseId;
@@ -581,7 +585,7 @@ export async function applyRegionSplit(mode: SplitMode) {
       used.push(color);
       return {
         id: newPartId(),
-        name: isBase ? (region?.name ?? part.name) : (region?.name ?? `Parte ${p.label}`),
+        name: isBase ? (region?.name ?? part.name) : (region?.name ?? detachedName.get(p.label) ?? `Parte ${p.label}`),
         color,
         visible: true,
         geometry: p.geometry,
@@ -594,9 +598,22 @@ export async function applyRegionSplit(mode: SplitMode) {
       cuts: [...cur.cuts, ...res.cuts],
       nextCutId: res.nextCutId,
       regions: null,
-      splitReport: res.islands.map((i) => ({ ...i, message: i.message ? `${regionOf.get(i.label)?.name ?? ""}: ${i.message}` : undefined })),
+      splitReport: res.islands.map((i) => {
+        const name = regionOf.get(i.label)?.name ?? detachedName.get(i.label);
+        return { ...i, message: i.message ? (name ? `${name}: ${i.message}` : i.message) : undefined };
+      }),
     }));
     setUi({ selectedPartId: parts[0]?.id ?? null, explode: 0.35, tool: "orbitar" });
+    log("info", "Resultado da divisão", {
+      regioes: res.islands.map((i) => ({
+        regiao: regionOf.get(i.label)?.name ?? detachedName.get(i.label) ?? i.label,
+        metodo: i.method,
+        completude: Math.round(i.completeness * 1000) / 1000,
+        aviso: i.message,
+      })),
+      pecas: parts.map((p) => ({ nome: p.name, tamanho: p.stats.size.map((v) => Math.round(v * 10) / 10), triangulos: p.stats.triangles })),
+      cortes: res.cuts.map((c) => ({ id: c.id, tipo: c.inlay ? "embutido" : c.kind })),
+    });
     await refreshInterfaces();
     const failed = res.islands.filter((i) => i.method === "falhou").length;
     const seams = res.islands.filter((i) => i.method === "contorno").length;
@@ -604,8 +621,10 @@ export async function applyRegionSplit(mode: SplitMode) {
       failed ? "aviso" : "sucesso",
       `${parts.length} peças geradas` +
         (seams ? `; ${seams} corte(s) seguiram o contorno pintado` : "") +
-        (failed ? `; ${failed} região(ões) não puderam ser separadas` : "") +
+        (res.detached.length ? `; ${res.detached.length} trecho(s) sem pintura soltos viraram peças próprias` : "") +
+        (failed ? `; ${failed} região(ões) não puderam ser separadas (veja os avisos na etapa Dividir)` : "") +
         ".",
+      failed ? 10000 : undefined,
     );
   });
 }
@@ -847,6 +866,24 @@ export async function buildFinal(): Promise<AppliedConnectorsResult | undefined>
       bed: d.print.bed,
     });
     const final: AppliedConnectorsResult = { parts: res.parts, extras, checks: res.checks, layout };
+    const names = new Map(d.parts.map((p) => [p.id, p.name]));
+    log("info", "Encaixes aplicados", {
+      cortes: plans.map((p) => {
+        const iface = d.interfaces.find((i) => i.id === p.interfaceId);
+        const check = res.checks.find((c) => c.interfaceId === p.interfaceId);
+        return {
+          pecas: iface ? `${names.get(iface.front)} ↔ ${names.get(iface.back)}` : p.interfaceId,
+          corte: iface ? (iface.inlay ? "embutido" : iface.kind) : "?",
+          area: iface ? Math.round(iface.area * 10) / 10 : 0,
+          tipo: p.embedded ? "embutido" : p.kind,
+          pontos: p.points.length,
+          tamanho: p.size,
+          comprimento: p.length,
+          ok: check?.ok,
+          avisos: p.warnings,
+        };
+      }),
+    });
     if (doc() === d) setUi({ final });
     const bad = res.checks.filter((c) => !c.ok);
     if (bad.length) toast("aviso", `${bad.length} encaixe(s) com problema: veja a lista de encaixes.`);
@@ -985,9 +1022,14 @@ function readme(d: Doc, final: AppliedConnectorsResult, plans: ConnectorPlan[]):
   lines.push("", "ENCAIXES");
   for (const plan of plans) {
     const iface = d.interfaces.find((i) => i.id === plan.interfaceId);
-    if (!iface || !plan.points.length) continue;
+    if (!iface) continue;
     const a = byId.get(iface.front)?.name ?? "?";
     const b = byId.get(iface.back)?.name ?? "?";
+    if (plan.embedded) {
+      lines.push(`- ${a} ↔ ${b}: peça embutida (${plan.length} mm), assenta no próprio rebaixo com folga ${plan.clearance} mm`);
+      continue;
+    }
+    if (!plan.points.length) continue;
     lines.push(
       plan.kind === "socket"
         ? `- ${a} ↔ ${b}: ${connectorKindNames[plan.kind]} (plugue na peça ${plan.maleSide === "front" ? a : b}), profundidade ${plan.length} mm, folga ${plan.clearance} mm`

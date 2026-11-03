@@ -5,6 +5,7 @@ import { analyzeMesh } from "../core/analysis";
 import { autoFitSplit } from "../core/autofit";
 import { countSelfIntersections } from "../core/bvh";
 import { applyConnectors, femaleHints, planConnectors, resolveConnectorConflicts } from "../core/connectors";
+import { computeContacts } from "../core/contacts";
 import { decimateManifold } from "../core/decimate";
 import { slugify, uniqueSlugs } from "../core/io/names";
 import { parseOBJ, writeOBJ } from "../core/io/obj";
@@ -194,6 +195,7 @@ const handlers: { [K in OpName]: Handler<K> } = {
       cuts: r.cuts,
       islands: r.islands,
       nextCutId: r.nextCutId,
+      detached: r.detached,
     };
   },
 
@@ -222,7 +224,9 @@ const handlers: { [K in OpName]: Handler<K> } = {
   },
 
   async interfaces({ parts, cuts }) {
-    return computeInterfaces(await getManifold(), parts, cuts);
+    const w = await getManifold();
+    // Cortes e, entre peças que já eram cascas separadas, os contatos (figura sobre a base).
+    return [...computeInterfaces(w, parts, cuts), ...computeContacts(w, parts)];
   },
 
   async planConnectors({ items }) {

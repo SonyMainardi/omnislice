@@ -256,6 +256,31 @@ describe("encaixes", () => {
     expect(applied.checks[0].ok).toBe(true);
   });
 
+  it("cada região de um corte ganha encaixe (duas pernas cortadas pelo mesmo plano)", () => {
+    // Duas pernas (Ø6 mm) presas a um quadril, cortadas por um plano só: antes o único pino padrão ia
+    // para a maior região e a outra perna ficava sem nenhum.
+    const legs = w.Manifold.union([
+      w.Manifold.cylinder(20, 3, 3, 48).translate([-6, 0, 0]),
+      w.Manifold.cylinder(20, 3, 3, 48).translate([6, 0, 0]),
+      w.Manifold.cube([20, 8, 6], true).translate([0, 0, 22]),
+    ]);
+    const mm = legs.getMesh();
+    legs.delete();
+    const g = geometryFromMesh({ positions: new Float32Array(mm.vertProperties), indices: new Uint32Array(mm.triVerts) });
+    const frame = frameFromNormal([0, 0, 10], [0, 0, 1]);
+    const { front, back } = cutByPlane(w, g, frame, 1, false);
+    const parts = [
+      { id: "cima", geometry: front[0] },
+      { id: "baixo", geometry: back[0] },
+    ];
+    const [iface] = computeInterfaces(w, parts, [{ id: 1, kind: "plane", frame }]);
+    const plan = planConnectors(w, { iface, front: front[0], back: back[0], settings: defaultConnectorSettings });
+    expect(plan.points).toHaveLength(2);
+    // Um em cada perna (as pernas estão a 12 mm uma da outra).
+    expect(Math.hypot(plan.points[0][0] - plan.points[1][0], plan.points[0][1] - plan.points[1][1])).toBeGreaterThan(10);
+    expect(applyConnectors(w, parts, [iface], [plan]).checks[0].ok).toBe(true);
+  });
+
   it("usa folgas de referência por material", () => {
     expect(autoClearance({ material: "pla", fit: "normal", kind: "cylinder" }, 8)).toBe(0.15);
     expect(autoClearance({ material: "pla", fit: "normal", kind: "cylinder" }, 4)).toBe(0.2);

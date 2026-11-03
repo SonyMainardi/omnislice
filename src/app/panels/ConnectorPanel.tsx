@@ -162,12 +162,13 @@ export function ConnectorPanel() {
                   <span style={{ color: a?.color }}>{a?.name}</span> ↔ <span style={{ color: b?.color }}>{b?.name}</span>
                 </div>
                 <small>
-                  {fmt(iface.area, 0)} mm² · {iface.kind === "plane" ? "plano" : "contorno"}
+                  {fmt(iface.area, 0)} mm² · {iface.inlay ? "embutido" : iface.kind === "plane" ? "plano" : iface.kind === "contact" ? "apoio" : "contorno"}
+                  {plan?.embedded && ` · assenta no próprio rebaixo, folga ${fmt(plan.clearance, 2)} mm`}
                   {plan && plan.points.length > 0 &&
                     (plan.kind === "socket"
                       ? ` · rebaixo no formato do corte, ${plan.length} mm`
                       : ` · ${plan.points.length}× Ø${plan.size} × ${plan.length} mm`)}
-                  {plan && plan.points.length === 0 && " · sem encaixe"}
+                  {plan && plan.points.length === 0 && !plan.embedded && " · sem encaixe"}
                   {d.connectors.overrides[iface.id]?.settings && " · ajuste próprio"}
                 </small>
                 {plan?.warnings.map((w) => (

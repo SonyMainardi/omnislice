@@ -98,6 +98,11 @@ export interface ConnectorPlan {
   profile?: Vec2[][];
   /** Rebaixo: quanto a raiz do plugue entra na peça menor (mm). */
   root?: number;
+  /**
+   * Corte embutido (olho, emblema): a peça da frente já assenta num rebaixo do próprio formato e não
+   * leva pino; o rebaixo na peça de trás só é alargado pela folga (`clearance`).
+   */
+  embedded?: boolean;
 }
 
 /** Pinos fixos: quando nenhum cabe, o corte recebe um rebaixo no formato da seção. */
@@ -227,6 +232,7 @@ export interface PlanInput {
  * invadiria uma terceira peça).
  */
 export function planConnectors(w: Wasm, input: PlanInput): ConnectorPlan {
+  if (input.iface.inlay) return planEmbedded(input);
   const plan = planChecked(w, input);
   // Corte pequeno demais para pino (um olho, um botão, uma orelha): em vez de ficar sem encaixe, a
   // peça menor encaixa num rebaixo com o formato do corte aberto na maior.
@@ -241,6 +247,25 @@ export function planConnectors(w: Wasm, input: PlanInput): ConnectorPlan {
   return plan;
 }
 
+/** Peça embutida: o encaixe é o próprio rebaixo; só a folga é aplicada (ver `applyConnectors`). */
+function planEmbedded(input: PlanInput): ConnectorPlan {
+  const { iface, settings } = input;
+  return {
+    interfaceId: iface.id,
+    kind: "none",
+    frame: iface.frame,
+    points: [],
+    size: 0,
+    length: iface.inlay ?? 0,
+    clearance: settings.clearance ?? autoClearance(settings, 4),
+    maleSide: "front",
+    chamfer: false,
+    deviation: iface.deviation,
+    warnings: [],
+    embedded: true,
+  };
+}
+
 function planChecked(w: Wasm, input: PlanInput): ConnectorPlan {
   const plan = planConnectorsRaw(w, input);
   if (!plan.points.length) return plan;
@@ -249,6 +274,8 @@ function planChecked(w: Wasm, input: PlanInput): ConnectorPlan {
   try {
     const front = arena.track(reg.fromGeometry(input.front));
     const back = arena.track(reg.fromGeometry(input.back));
+    // Num contato (figura sobre a base) o pino e o furo atravessam a folga entre as peças.
+    const gap = input.iface.kind === "contact" ? 2 * Math.PI * (plan.size / 2 + plan.clearance) ** 2 * input.iface.deviation : 0;
     const keep: Vec2[] = [];
     for (const p of plan.points) {
       const into: ConnectorSolids = { add: new Map(), subtract: new Map(), extras: [] };
@@ -263,7 +290,7 @@ function planChecked(w: Wasm, input: PlanInput): ConnectorPlan {
         total += v;
         escaping += Math.max(0, v - inside);
       }
-      if (escaping <= Math.max(total * 0.02, 0.05)) keep.push(p);
+      if (escaping <= Math.max(total * 0.02, 0.05) + gap) keep.push(p);
     }
     const dropped = plan.points.length - keep.length;
     if (dropped && plan.kind === "socket") plan.warnings.push("O rebaixo atravessaria a parede da peça maior: encaixe omitido.");
@@ -340,7 +367,9 @@ function planOne(w: Wasm, input: PlanInput): ConnectorPlan {
     // Maior encaixe que a região mais larga do corte comporta, com a parede mínima em volta.
     const widest = Math.max(...radii);
     const largest = Math.floor((widest - margin) * 4) / 2;
-    if (settings.size === null && !isMagnet && size / 2 + margin > radii[0]) size = Math.floor((radii[0] - margin) * 4) / 2;
+    // Seção estreita (um tornozelo, um pulso): o pino automático encolhe até caber com a mesma parede
+    // usada para aceitar um encaixe na região (3/4 da parede mínima), em vez de sumir.
+    if (settings.size === null && !isMagnet && size / 2 + margin > radii[0]) size = Math.min(size, Math.floor((radii[0] - margin * 0.75) * 4) / 2);
     // Um tamanho escolhido à mão vale para todos os cortes (padrão) ou foi pensado para outro corte:
     // onde ele não cabe, o pino é reduzido em vez de sumir (antes, aumentar o pino da cintura tirava
     // os pinos dos tornozelos sem aviso visível). Ímã não: o tamanho é o do ímã que a pessoa comprou.
@@ -368,17 +397,11 @@ function planOne(w: Wasm, input: PlanInput): ConnectorPlan {
     const quota = new Map<number, number>();
     if (input.manualPoints?.length) plan.points = input.manualPoints.map((p) => [p[0], p[1]] as Vec2);
     else {
+      // Cada região do corte (duas pernas no mesmo plano, duas solas sobre a base) é uma peça a
+      // alinhar: todas ganham pelo menos um encaixe, e a quantidade escolhida é dividida pela área.
       const count = Math.max(settings.count, 1);
-      fitting.slice(0, count).forEach(({ i }) => quota.set(i, 1));
-      let remaining = count - quota.size;
       const totalArea = fitting.reduce((s, f) => s + f.isl.area(), 0);
-      for (const { isl, i } of fitting) {
-        if (remaining <= 0) break;
-        const extra = Math.min(remaining, Math.round((isl.area() / totalArea) * (count - quota.size)));
-        quota.set(i, (quota.get(i) ?? 0) + extra);
-        remaining -= extra;
-      }
-      if (remaining > 0) quota.set(fitting[0].i, (quota.get(fitting[0].i) ?? 0) + remaining);
+      for (const { isl, i } of fitting) quota.set(i, Math.max(1, Math.round((isl.area() / totalArea) * count)));
       for (const { isl, i } of fitting) {
         const k = quota.get(i) ?? 0;
         if (!k) continue;
@@ -864,6 +887,19 @@ export function applyConnectors(w: Wasm, parts: PartRef[], interfaces: Interface
     for (const list of [...into.add.values(), ...into.subtract.values()]) arena.trackAll(list);
     for (const e of into.extras) arena.track(e.solid);
 
+    // Embutidos: o rebaixo da peça de trás é alargado pela folga (a peça embutida crescida).
+    for (const plan of plans) {
+      if (!plan.embedded || !(plan.clearance > 0)) continue;
+      const iface = interfaces.find((i) => i.id === plan.interfaceId);
+      const front = iface && parts.find((p) => p.id === iface.front);
+      if (!iface || !front || !solids.has(iface.back)) continue;
+      const grown = grownSolid(reg, front.geometry, plan.clearance);
+      if (!grown) continue;
+      const list = into.subtract.get(iface.back);
+      const pocket = arena.track(reg.connector(arena.track(grown)));
+      if (list) list.push(pocket);
+      else into.subtract.set(iface.back, [pocket]);
+    }
     const result = new Map<string, Manifold>();
     for (const [id, solid] of solids) {
       let m = solid;
@@ -876,12 +912,18 @@ export function applyConnectors(w: Wasm, parts: PartRef[], interfaces: Interface
     const checks: ConnectorCheck[] = [];
     for (const plan of plans) {
       const iface = interfaces.find((i) => i.id === plan.interfaceId);
-      if (!iface || !plan.points.length) continue;
+      if (!iface || (!plan.points.length && !plan.embedded)) continue;
       const f = result.get(iface.front);
       const b = result.get(iface.back);
       if (!f || !b) continue;
       const overlap = arena.track(f.intersect(b));
-      const collision = Math.abs(overlap.volume());
+      let collision = Math.abs(overlap.volume());
+      // Peças que já se sobrepunham no arquivo (a sola cravada na base): só conta o que os encaixes
+      // acrescentaram.
+      if (iface.kind === "contact" && collision > 0) {
+        const before = Math.abs(arena.track(solids.get(iface.front)!.intersect(solids.get(iface.back)!)).volume());
+        collision = Math.max(0, collision - before);
+      }
       const brokeThrough = [iface.front, iface.back].some((id) => {
         const before = solids.get(id)!;
         const after = result.get(id)!;
@@ -901,3 +943,35 @@ export function applyConnectors(w: Wasm, parts: PartRef[], interfaces: Interface
   }
 }
 
+/**
+ * A peça com cada vértice afastado `by` mm pela normal (média das faces em volta): usada para abrir a
+ * folga em volta de uma peça embutida. Mesma topologia, então o Manifold aceita sem reconstruir.
+ */
+function grownSolid(reg: RunRegistry, g: PartGeometry, by: number): Manifold | null {
+  const p = g.mesh.positions;
+  const idx = g.mesh.indices;
+  const vn = new Float64Array(p.length);
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t] * 3;
+    const b = idx[t + 1] * 3;
+    const c = idx[t + 2] * 3;
+    const ux = p[b] - p[a];
+    const uy = p[b + 1] - p[a + 1];
+    const uz = p[b + 2] - p[a + 2];
+    const vx = p[c] - p[a];
+    const vy = p[c + 1] - p[a + 1];
+    const vz = p[c + 2] - p[a + 2];
+    const n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+    for (const v of [a, b, c]) for (let k = 0; k < 3; k++) vn[v + k] += n[k];
+  }
+  const q = new Float32Array(p.length);
+  for (let v = 0; v < p.length; v += 3) {
+    const l = Math.hypot(vn[v], vn[v + 1], vn[v + 2]) || 1;
+    for (let k = 0; k < 3; k++) q[v + k] = p[v + k] + (by * vn[v + k]) / l;
+  }
+  try {
+    return reg.fromGeometry({ mesh: { positions: q, indices: idx }, src: g.src, cut: g.cut });
+  } catch {
+    return null;
+  }
+}

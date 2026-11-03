@@ -42,6 +42,12 @@ const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
 async function serve(dir) {
   const server = createServer(async (req, res) => {
     const path = decodeURIComponent((req.url ?? "/").split("?")[0]);
+    // Registro de atividade (no `npm run dev` quem grava é o plugin do Vite): aqui só é aceito.
+    if (path === "/__omnislice/log") {
+      req.resume();
+      res.writeHead(204).end();
+      return;
+    }
     const file = join(dir, path === "/" ? "index.html" : path);
     try {
       const data = await readFile(file);
